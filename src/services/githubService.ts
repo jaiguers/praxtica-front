@@ -15,8 +15,7 @@ export interface GithubVerificationResponse {
 export const githubService = {
   async verifyChallenge(challengeId: string, stepId: number, githubUsername: string): Promise<GithubVerificationResponse> {
     try {
-      const response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/verify-challenge`, {
-        challengeId,
+      const response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/challenges/verify/${challengeId}`, {
         stepId,
         githubUsername
       });

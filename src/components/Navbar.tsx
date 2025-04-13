@@ -1,9 +1,8 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useRef } from 'react';
 import Link from 'next/link';
 import { useSession, signIn, signOut } from 'next-auth/react';
-import { useRouter } from 'next/navigation';
 import { useTheme } from '@/context/ThemeContext';
 
 export default function Navbar() {
@@ -11,27 +10,12 @@ export default function Navbar() {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const router = useRouter();
   const { isDarkMode, toggleDarkMode } = useTheme();
-
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsDropdownOpen(false);
-      }
-    }
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, []);
 
   const handleSignOut = async () => {
     setIsDropdownOpen(false);
     setIsMobileMenuOpen(false);
-    await signOut({ redirect: false });
-    router.push('/');
+    await signOut({ redirect: true, callbackUrl: '/' });
   };
 
   const NavLinks = () => (
@@ -47,18 +31,16 @@ export default function Navbar() {
       )}
       <Link
         href="/plans"
-        className={`text-sm font-medium ${
-          isDarkMode ? 'text-gray-300 hover:text-white' : 'text-gray-700 hover:text-black'
-        }`}
+        className={`text-sm font-medium ${isDarkMode ? 'text-gray-300 hover:text-white' : 'text-gray-700 hover:text-black'
+          }`}
         onClick={() => setIsMobileMenuOpen(false)}
       >
         Planes
       </Link>
       <Link
         href="/blog"
-        className={`text-sm font-medium ${
-          isDarkMode ? 'text-gray-300 hover:text-white' : 'text-gray-700 hover:text-black'
-        }`}
+        className={`text-sm font-medium ${isDarkMode ? 'text-gray-300 hover:text-white' : 'text-gray-700 hover:text-black'
+          }`}
         onClick={() => setIsMobileMenuOpen(false)}
       >
         Blog
@@ -73,10 +55,10 @@ export default function Navbar() {
           {/* Logo y Menú Desktop */}
           <div className="flex items-center">
             <Link href="/" className="flex items-center">
-              <img 
+              <img
                 src={isDarkMode ? "/images/logo.png" : "/images/logo-dark.png"}
-                alt="Practi Logo" 
-                className="h-10 md:h-14 w-auto" 
+                alt="Practi Logo"
+                className="h-10 md:h-14 w-auto"
               />
             </Link>
             <div className="hidden md:flex items-center space-x-8 ml-8">
@@ -117,9 +99,8 @@ export default function Navbar() {
 
             <button
               onClick={toggleDarkMode}
-              className={`p-2 rounded-lg ${
-                isDarkMode ? 'bg-gray-700 text-yellow-300' : 'bg-gray-200 text-gray-600'
-              }`}
+              className={`p-2 rounded-lg ${isDarkMode ? 'bg-gray-700 text-yellow-300' : 'bg-gray-200 text-gray-600'
+                }`}
             >
               {isDarkMode ? (
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -141,19 +122,18 @@ export default function Navbar() {
                 </svg>
               )}
             </button>
-            
+
             {/* Ranking Number - Solo para usuarios logueados */}
             {session && (
-              <div className={`hidden sm:flex items-center justify-center px-3 py-1 rounded-full font-medium text-sm ${
-                isDarkMode ? 'bg-gray-700 text-emerald-400' : 'bg-gray-200 text-emerald-600'
-              }`}>
-                150
+              <div className={`hidden sm:flex items-center justify-center px-3 py-1 rounded-full font-medium text-sm ${isDarkMode ? 'bg-gray-700 text-emerald-400' : 'bg-gray-200 text-emerald-600'
+                }`}>
+                Pts: {session.user?.ranking}
               </div>
             )}
 
             {session ? (
               <div className="relative" ref={dropdownRef}>
-                <div 
+                <div
                   className="flex items-center cursor-pointer"
                   onClick={() => setIsDropdownOpen(!isDropdownOpen)}
                 >
@@ -163,31 +143,27 @@ export default function Navbar() {
                     alt={session.user?.name || ''}
                   />
                   {isDropdownOpen && (
-                    <div className={`absolute right-0 mt-2 w-48 py-1 rounded-md shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none z-50 ${
-                      isDarkMode ? 'bg-gray-800' : 'bg-white'
-                    }`}>
-                      <div className={`px-4 py-2 text-sm border-b ${
-                        isDarkMode ? 'text-gray-200 border-gray-700' : 'text-gray-700 border-gray-200'
+                    <div className={`absolute right-0 mt-2 w-48 py-1 rounded-md shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none z-50 ${isDarkMode ? 'bg-gray-800' : 'bg-white'
                       }`}>
+                      <div className={`px-4 py-2 text-sm border-b ${isDarkMode ? 'text-gray-200 border-gray-700' : 'text-gray-700 border-gray-200'
+                        }`}>
                         <p className="font-medium">{session.user?.name}</p>
                         <p className={`truncate ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
                           {session.user?.email}
                         </p>
                         <div className="mt-2 sm:hidden">
-                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                            isDarkMode ? 'bg-gray-700 text-emerald-400' : 'bg-gray-200 text-emerald-600'
-                          }`}>
-                            Ranking: 150
+                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${isDarkMode ? 'bg-gray-700 text-emerald-400' : 'bg-gray-200 text-emerald-600'
+                            }`}>
+                            Ranking: {session.user?.ranking}
                           </span>
                         </div>
                       </div>
                       <Link
                         href="/redeem-ranking"
-                        className={`block w-full text-left px-4 py-2 text-sm ${
-                          isDarkMode
+                        className={`block w-full text-left px-4 py-2 text-sm ${isDarkMode
                             ? 'text-gray-200 hover:bg-gray-700'
                             : 'text-gray-700 hover:bg-gray-100'
-                        }`}
+                          }`}
                         onClick={() => {
                           setIsDropdownOpen(false);
                           setIsMobileMenuOpen(false);
@@ -197,11 +173,10 @@ export default function Navbar() {
                       </Link>
                       <button
                         onClick={handleSignOut}
-                        className={`block w-full text-left px-4 py-2 text-sm ${
-                          isDarkMode
+                        className={`block w-full text-left px-4 py-2 text-sm ${isDarkMode
                             ? 'text-gray-200 hover:bg-gray-700'
                             : 'text-gray-700 hover:bg-gray-100'
-                        }`}
+                          }`}
                       >
                         Cerrar Sesión
                       </button>
@@ -212,11 +187,10 @@ export default function Navbar() {
             ) : (
               <button
                 onClick={() => signIn('github')}
-                className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md ${
-                  isDarkMode
+                className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md ${isDarkMode
                     ? 'text-gray-800 bg-gray-200 hover:bg-gray-300'
                     : 'text-white bg-gray-800 hover:bg-gray-700'
-                }`}
+                  }`}
               >
                 <svg
                   className="h-5 w-5 mr-2"

@@ -3,7 +3,54 @@
 import { useState, useRef, useEffect } from 'react';
 import { useTheme } from '@/context/ThemeContext';
 import { useSession } from 'next-auth/react';
+import { useRouter, useParams } from 'next/navigation';
 import { openAIService } from '@/services/openaiService';
+import { challengeService } from '@/services/challengeService';
+import Modal from '@/components/Modal';
+
+interface SpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start(): void;
+  stop(): void;
+  abort(): void;
+  onresult: ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => any) | null;
+  onerror: ((this: SpeechRecognition, ev: SpeechRecognitionErrorEvent) => any) | null;
+  onend: ((this: SpeechRecognition, ev: Event) => any) | null;
+}
+
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList;
+}
+
+interface SpeechRecognitionErrorEvent extends Event {
+  error: string;
+}
+
+interface SpeechRecognitionResultList {
+  length: number;
+  item(index: number): SpeechRecognitionResult;
+  [index: number]: SpeechRecognitionResult;
+}
+
+interface SpeechRecognitionResult {
+  isFinal: boolean;
+  length: number;
+  item(index: number): SpeechRecognitionAlternative;
+  [index: number]: SpeechRecognitionAlternative;
+}
+
+interface SpeechRecognitionAlternative {
+  transcript: string;
+  confidence: number;
+}
+
+declare global {
+  interface Window {
+    webkitSpeechRecognition: new () => SpeechRecognition;
+  }
+}
 
 interface Message {
   role: 'user' | 'assistant';
@@ -18,34 +65,35 @@ type PracticeType = 'interview' | 'grammar' | 'vocabulary' | 'pronunciation' | '
 
 export default function EnglishPractice() {
   const { isDarkMode } = useTheme();
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
+  const router = useRouter();
+  const params = useParams();
+  const challengeId = params.challengeId as string;
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
       content: "Hello! I'm your English practice assistant. I'll help you improve your English through conversation. What would you like to practice today? We can work on:"
     }
   ]);
-  const [expandedSuggestions, setExpandedSuggestions] = useState<{[key: number]: boolean}>({});
+  const [expandedSuggestions, setExpandedSuggestions] = useState<{ [key: number]: boolean }>({});
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [selectedPracticeType, setSelectedPracticeType] = useState<PracticeType | null>(null);
   const [conversationStarted, setConversationStarted] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [currentStepId, setCurrentStepId] = useState(1);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [modalMessage, setModalMessage] = useState('');
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-
-  useEffect(() => {
-    // Inicializar el reconocimiento de voz
+  const initializeSpeechRecognition = () => {
     if (typeof window !== 'undefined' && 'webkitSpeechRecognition' in window) {
-      const SpeechRecognition = (window as any).webkitSpeechRecognition;
+      const SpeechRecognition = window.webkitSpeechRecognition;
       recognitionRef.current = new SpeechRecognition();
       recognitionRef.current.continuous = true;
       recognitionRef.current.interimResults = true;
@@ -56,7 +104,7 @@ export default function EnglishPractice() {
           .map((result) => result[0])
           .map((result) => result.transcript)
           .join('');
-        
+
         setInput(transcript);
       };
 
@@ -69,13 +117,33 @@ export default function EnglishPractice() {
         setIsListening(false);
       };
     }
+  };
 
-    return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
-    };
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      router.push('/auth/signin');
+    }
+  }, [status, router]);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  useEffect(() => {
+    initializeSpeechRecognition();
   }, []);
+
+  if (status === 'loading') {
+    return (
+      <div className={`min-h-screen ${isDarkMode ? 'bg-gray-900' : 'bg-gray-50'} flex items-center justify-center`}>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-600"></div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return null;
+  }
 
   const toggleListening = () => {
     if (!recognitionRef.current) {
@@ -93,9 +161,8 @@ export default function EnglishPractice() {
   };
 
   const handlePracticeTypeSelection = async (type: PracticeType) => {
-    setSelectedPracticeType(type);
     setLoading(true);
-    
+    setError(null);
     let context = '';
     switch (type) {
       case 'interview':
@@ -114,45 +181,43 @@ export default function EnglishPractice() {
         context = 'business English';
         break;
     }
-    
+
     try {
+      // Verificar límites de uso
+      const usageLimits = await challengeService.checkUsageLimits('english');
+      if (!usageLimits.success) {
+        setError(`[Mensaje]. ${usageLimits.message}`);
+        setLoading(false);
+        return;
+      }
+
       const result = await openAIService.generateConversation(context, 'intermediate');
-      
+
       // Verificar si result.conversation existe y tiene elementos
       const assistantMessage = result.conversation && result.conversation.length > 0
         ? result.conversation[result.conversation.length - 1].content
         : "I'll help you practice " + context + ". Let's get started!";
-      
+
       setMessages(prev => [
         ...prev,
-        { 
-          role: 'user', 
-          content: `I want to practice ${context}.` 
+        {
+          role: 'user',
+          content: `I want to practice ${context}.`
         },
-        { 
-          role: 'assistant', 
+        {
+          role: 'assistant',
           content: assistantMessage
-          // No incluimos feedback al inicio de la conversación
         }
       ]);
-      
+
       setConversationStarted(true);
+      setCurrentStepId(prev => 1 + prev);
     } catch (error) {
-      console.error('Error starting conversation:', error);
-      setMessages(prev => [
-        ...prev,
-        { 
-          role: 'assistant', 
-          content: 'Lo siento, hubo un error al iniciar la conversación. Por favor, intenta de nuevo.',
-          feedback: {
-            type: 'error',
-            suggestions: ['Intenta de nuevo en unos momentos.']
-          }
-        }
-      ]);
-    } finally {
-      setLoading(false);
+      console.error('Error:', error);
+      setError('Ocurrió un error al generar la conversación. Por favor, intenta de nuevo.');
     }
+
+    setLoading(false);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -168,11 +233,21 @@ export default function EnglishPractice() {
     setInput('');
     setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
     setLoading(true);
+    setError(null);
 
     try {
+      // Verificar límites de uso
+      const usageLimits = await challengeService.checkUsageLimits('english');
+      if (!usageLimits.success) {
+        setModalMessage(usageLimits.message);
+        setIsModalOpen(true);
+        setError(usageLimits.message);
+        return;
+      }
+
       // Primero verificamos la gramática
       const grammarResult = await openAIService.checkGrammar(userMessage);
-      
+
       // Luego generamos una conversación basada en el contexto
       const conversationResult = await openAIService.generateConversation(
         userMessage,
@@ -180,13 +255,15 @@ export default function EnglishPractice() {
       );
 
       // Procesamos la respuesta
+      const feedbackType = grammarResult.errors.length === 0
+        ? 'perfect'
+        : (grammarResult.errors.some(error => error.type === 'grammar') ? 'error' : 'suggestion');
+
       const assistantMessage: Message = {
         role: 'assistant',
         content: conversationResult.conversation[conversationResult.conversation.length - 1].content,
         feedback: {
-          type: grammarResult.errors.length === 0 
-            ? 'perfect' 
-            : (grammarResult.errors.some(error => error.type === 'grammar') ? 'error' : 'suggestion'),
+          type: feedbackType,
           suggestions: [
             ...grammarResult.suggestions,
             // ...conversationResult.vocabulary.map(v => `Vocabulary: ${v.word} - ${v.meaning}`)
@@ -195,8 +272,20 @@ export default function EnglishPractice() {
       };
 
       setMessages(prev => [...prev, assistantMessage]);
+
+      // Enviamos el feedback al backend
+      await challengeService.updateChallengeFeedback(challengeId, {
+        stepId: currentStepId,
+        feedback: {
+          type: feedbackType
+        }
+      });
+      // Incrementamos el stepId para el próximo mensaje
+      setCurrentStepId(prev => prev + 1);
+
     } catch (error) {
       console.error('Error:', error);
+      setError('Ocurrió un error al generar la conversación. Por favor, intenta de nuevo.');
       setMessages(prev => [...prev, {
         role: 'assistant',
         content: 'Lo siento, hubo un error al procesar tu mensaje. Por favor, intenta de nuevo.',
@@ -205,9 +294,9 @@ export default function EnglishPractice() {
           suggestions: ['Intenta de nuevo en unos momentos.']
         }
       }]);
-    } finally {
-      setLoading(false);
     }
+
+    setLoading(false);
   };
 
   const toggleSuggestions = (index: number) => {
@@ -276,16 +365,14 @@ export default function EnglishPractice() {
                           onClick={() => toggleSuggestions(index)}
                           className="flex items-center gap-2 text-sm font-medium hover:opacity-80"
                         >
-                          <div className={`w-2.5 h-2.5 rounded-full ${
-                            message.feedback?.type === 'error'
-                              ? isDarkMode ? 'bg-pink-600' : 'bg-pink-500'
-                              : isDarkMode ? 'bg-yellow-500' : 'bg-yellow-400'
-                          }`} />
+                          <div className={`w-2.5 h-2.5 rounded-full ${message.feedback?.type === 'error'
+                            ? isDarkMode ? 'bg-pink-600' : 'bg-pink-500'
+                            : isDarkMode ? 'bg-yellow-500' : 'bg-yellow-400'
+                            }`} />
                           <span>Sugerencias</span>
                           <svg
-                            className={`w-4 h-4 transform transition-transform ${
-                              expandedSuggestions[index] ? 'rotate-180' : ''
-                            }`}
+                            className={`w-4 h-4 transform transition-transform ${expandedSuggestions[index] ? 'rotate-180' : ''
+                              }`}
                             fill="none"
                             stroke="currentColor"
                             viewBox="0 0 24 24"
@@ -316,77 +403,72 @@ export default function EnglishPractice() {
               </div>
             </div>
           ))}
-          
+
           {/* Opciones de práctica si no se ha seleccionado ninguna */}
           {!conversationStarted && messages.length === 1 && (
             <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               <button
                 onClick={() => handlePracticeTypeSelection('interview')}
                 disabled={loading}
-                className={`p-4 rounded-lg text-left transition-all ${
-                  isDarkMode 
-                    ? 'bg-gray-700 hover:bg-gray-600 text-white' 
-                    : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
-                } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                className={`p-4 rounded-lg text-left transition-all ${isDarkMode
+                  ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                  : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
+                  } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 <h3 className="font-medium mb-1">Software Development Interview</h3>
                 <p className="text-sm opacity-80">Practice technical development interviews</p>
               </button>
-              
+
               <button
                 onClick={() => handlePracticeTypeSelection('grammar')}
                 disabled={loading}
-                className={`p-4 rounded-lg text-left transition-all ${
-                  isDarkMode 
-                    ? 'bg-gray-700 hover:bg-gray-600 text-white' 
-                    : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
-                } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                className={`p-4 rounded-lg text-left transition-all ${isDarkMode
+                  ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                  : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
+                  } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 <h3 className="font-medium mb-1">Grammar Practice</h3>
                 <p className="text-sm opacity-80">Focus on grammar rules and structures</p>
               </button>
-              
+
               <button
                 onClick={() => handlePracticeTypeSelection('vocabulary')}
                 disabled={loading}
-                className={`p-4 rounded-lg text-left transition-all ${
-                  isDarkMode 
-                    ? 'bg-gray-700 hover:bg-gray-600 text-white' 
-                    : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
-                } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                className={`p-4 rounded-lg text-left transition-all ${isDarkMode
+                  ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                  : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
+                  } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 <h3 className="font-medium mb-1">Vocabulary Building</h3>
                 <p className="text-sm opacity-80">Learn new words and expressions</p>
               </button>
-              
+
               <button
                 onClick={() => handlePracticeTypeSelection('pronunciation')}
                 disabled={loading}
-                className={`p-4 rounded-lg text-left transition-all ${
-                  isDarkMode 
-                    ? 'bg-gray-700 hover:bg-gray-600 text-white' 
-                    : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
-                } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                className={`p-4 rounded-lg text-left transition-all ${isDarkMode
+                  ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                  : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
+                  } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 <h3 className="font-medium mb-1">Pronunciation Tips</h3>
                 <p className="text-sm opacity-80">Improve your pronunciation</p>
               </button>
-              
+
               <button
                 onClick={() => handlePracticeTypeSelection('business')}
                 disabled={loading}
-                className={`p-4 rounded-lg text-left transition-all ${
-                  isDarkMode 
-                    ? 'bg-gray-700 hover:bg-gray-600 text-white' 
-                    : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
-                } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                className={`p-4 rounded-lg text-left transition-all ${isDarkMode
+                  ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                  : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
+                  } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 <h3 className="font-medium mb-1">Business English</h3>
                 <p className="text-sm opacity-80">Practice professional and business English</p>
               </button>
             </div>
           )}
-          
+
           <div ref={messagesEndRef} />
         </div>
       </div>
@@ -394,6 +476,11 @@ export default function EnglishPractice() {
       {/* Formulario de entrada */}
       <div className={`border-t ${isDarkMode ? 'border-gray-700' : 'border-gray-200'} p-6`}>
         <form onSubmit={handleSubmit} className="max-w-3xl mx-auto">
+          {error && (
+            <div className={`mb-4 p-4 rounded-lg ${isDarkMode ? 'bg-red-900/50 text-red-200' : 'bg-red-50 text-red-600'}`}>
+              {error}
+            </div>
+          )}
           <div className="relative">
             <textarea
               value={input}
@@ -406,26 +493,24 @@ export default function EnglishPractice() {
               }}
               placeholder="Escribe tu mensaje en inglés... (Enter para enviar, Shift+Enter para nueva línea)"
               rows={3}
-              className={`w-full p-4 pr-24 rounded-lg resize-none ${
-                isDarkMode
-                  ? 'bg-gray-700 text-white placeholder-gray-400 border-gray-600'
-                  : 'bg-white text-gray-900 placeholder-gray-500 border-gray-300'
-              } border focus:outline-none focus:ring-2 focus:ring-blue-500`}
+              className={`w-full p-4 pr-24 rounded-lg resize-none ${isDarkMode
+                ? 'bg-gray-700 text-white placeholder-gray-400 border-gray-600'
+                : 'bg-white text-gray-900 placeholder-gray-500 border-gray-300'
+                } border focus:outline-none focus:ring-2 focus:ring-blue-500`}
               disabled={loading || !conversationStarted}
             />
             <div className="absolute right-2 top-2 flex gap-2">
               <button
                 type="button"
                 onClick={toggleListening}
-                className={`p-2 rounded-lg ${
-                  isDarkMode 
-                    ? isListening 
-                      ? 'bg-pink-500 text-white' 
-                      : 'bg-gray-600 text-gray-300 hover:text-white'
-                    : isListening
+                className={`p-2 rounded-lg ${isDarkMode
+                  ? isListening
+                    ? 'bg-pink-500 text-white'
+                    : 'bg-gray-600 text-gray-300 hover:text-white'
+                  : isListening
                     ? 'bg-pink-500 text-white'
                     : 'bg-gray-100 text-gray-600 hover:text-gray-900'
-                }`}
+                  }`}
                 disabled={!conversationStarted}
               >
                 <svg
@@ -445,9 +530,8 @@ export default function EnglishPractice() {
               <button
                 type="submit"
                 disabled={loading || !conversationStarted}
-                className={`p-2 rounded-lg ${
-                  isDarkMode ? 'text-gray-300 hover:text-white' : 'text-gray-600 hover:text-gray-900'
-                } ${(loading || !conversationStarted) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                className={`p-2 rounded-lg ${isDarkMode ? 'text-gray-300 hover:text-white' : 'text-gray-600 hover:text-gray-900'
+                  } ${(loading || !conversationStarted) ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 {loading ? (
                   <svg className="animate-spin h-6 w-6" viewBox="0 0 24 24">
@@ -486,6 +570,14 @@ export default function EnglishPractice() {
           </div>
         </form>
       </div>
+
+      <Modal 
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        title="Límite de Uso Alcanzado"
+      >
+        <p className="text-gray-700">{modalMessage}</p>
+      </Modal>
     </div>
   );
 } 

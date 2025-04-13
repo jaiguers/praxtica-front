@@ -8,8 +8,8 @@ import ClientLayout from '@/components/ClientLayout';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'Wiseify',
-  description: 'A platform to learn and practice coding',
+  title: 'Praxtica: Practica tus habilidades con desafíos avanzados',
+  description: 'Una plataforma para aprender y practicar tus habilidades con desafíos avanzados',
 };
 
 export default function RootLayout({

@@ -1,10 +1,18 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
 export async function fetchWithAuth(endpoint: string, options: RequestInit = {}) {
+  const session = await import('next-auth/react').then(mod => mod.getSession());
+  const token = session?.user?.token;
+
+  if (!token) {
+    throw new Error('No access token available');
+  }
+
   const response = await fetch(`${API_URL}${endpoint}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
       ...options.headers,
     },
   });
