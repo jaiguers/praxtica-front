@@ -6,11 +6,15 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",
     "@octokit/rest": "^21.1.1",
+    "@prisma/client": "^6.6.0",
     "@tailwindcss/aspect-ratio": "^0.4.2",
     "axios": "^1.8.4",
     "lucide-react": "^0.487.0",
