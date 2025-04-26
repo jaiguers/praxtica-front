@@ -1,23 +1,26 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { authOptions } from '@/lib/auth';
 
 export async function GET() {
-  const session = await getServerSession();
+  const session = await getServerSession(authOptions);
 
-  if (!session?.user) {
+  if (!session?.user?.token) {
     return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
   }
 
   try {
-    const challenges = await prisma.challenge.findMany({
-      where: {
-        userId: session.user.id,
-      },
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/challenges`, {
+      headers: {
+        Authorization: `Bearer ${session.user.token}`
+      }
     });
 
+    if (!response.ok) {
+      throw new Error('Error al obtener los desafíos');
+    }
+
+    const challenges = await response.json();
     return NextResponse.json(challenges);
   } catch (error) {
     console.error('Error fetching challenges:', error);

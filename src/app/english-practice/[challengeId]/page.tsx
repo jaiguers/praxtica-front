@@ -7,6 +7,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { openAIService } from '@/services/openaiService';
 import { challengeService } from '@/services/challengeService';
 import Modal from '@/components/Modal';
+import Link from 'next/link';
 
 interface SpeechRecognition extends EventTarget {
   continuous: boolean;
@@ -186,8 +187,9 @@ export default function EnglishPractice() {
       // Verificar límites de uso
       const usageLimits = await challengeService.checkUsageLimits('english');
       if (!usageLimits.success) {
-        setError(`[Mensaje]. ${usageLimits.message}`);
-        setLoading(false);
+        setModalMessage(usageLimits.message);
+        setIsModalOpen(true);
+        setError(usageLimits.message);
         return;
       }
 
@@ -576,7 +578,31 @@ export default function EnglishPractice() {
         onClose={() => setIsModalOpen(false)}
         title="Límite de Uso Alcanzado"
       >
-        <p className="text-gray-700">{modalMessage}</p>
+        <div className="space-y-4">
+          <p className="text-gray-700">{modalMessage}</p>
+          <p className="text-gray-700">Actualiza tu plan y sigue disfrutando de todos los beneficios</p>
+          <Link
+            href="/plans"
+            className={`inline-flex items-center px-4 py-2 rounded-lg text-white font-medium transition-colors ${
+              isDarkMode ? 'bg-red-500 hover:bg-red-600' : 'bg-red-500 hover:bg-red-600'
+            }`}
+          >
+            Actualizar ahora
+            <svg
+              className="ml-2 w-5 h-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M13 7l5 5m0 0l-5 5m5-5H6"
+              />
+            </svg>
+          </Link>
+        </div>
       </Modal>
     </div>
   );

@@ -59,6 +59,8 @@ export default function Dashboard() {
   const handleStartChallenge = (challenge: Challenge) => {
     if (challenge.type.toLowerCase() === 'english') {
       router.push(`/english-practice/${challenge._id}`);
+    } else if (challenge.type.toLowerCase() === 'spanish') {
+      router.push(`/spanish-practice/${challenge._id}`);
     } else {
       router.push(`/challenges/${challenge._id}`);
     }
@@ -97,9 +99,8 @@ export default function Dashboard() {
           {challenges.map((challenge) => (
             <div
               key={challenge._id}
-              className={`rounded-lg p-6 ${
-                isDarkMode ? 'bg-gray-800/50 hover:bg-gray-800/70' : 'bg-white hover:bg-gray-50'
-              } transition-colors duration-200 shadow-sm`}
+              className={`rounded-lg p-6 ${isDarkMode ? 'bg-gray-800/50 hover:bg-gray-800/70' : 'bg-white hover:bg-gray-50'
+                } transition-colors duration-200 shadow-sm`}
             >
               <h3 className={`text-xl font-semibold mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
                 {challenge.title}
@@ -113,11 +114,10 @@ export default function Dashboard() {
                 </span>
                 <button
                   onClick={() => handleStartChallenge(challenge)}
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors duration-200 ${
-                    isDarkMode
-                      ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                      : 'bg-blue-500 hover:bg-blue-600 text-white'
-                  }`}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors duration-200 ${isDarkMode
+                    ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                    : 'bg-blue-500 hover:bg-blue-600 text-white'
+                    }`}
                 >
                   Comenzar Desafío
                 </button>
