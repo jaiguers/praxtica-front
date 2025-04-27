@@ -7,6 +7,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { openAIService } from '@/services/openaiService';
 import { challengeService } from '@/services/challengeService';
 import Modal from '@/components/Modal';
+import Link from 'next/link';
 
 interface SpeechRecognition extends EventTarget {
     continuous: boolean;
@@ -53,7 +54,7 @@ declare global {
 }
 
 interface Message {
-    role: 'user' | 'assistant';
+    role: 'user' | 'assistant' | 'system';
     content: string;
     feedback?: {
         type: 'perfect' | 'error' | 'suggestion';
@@ -71,6 +72,10 @@ export default function SpanishPracticePage() {
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const recognitionRef = useRef<SpeechRecognition | null>(null);
     const [messages, setMessages] = useState<Message[]>([
+        {
+            role: 'system',
+            content: 'Eres un asistente que ayuda a practicar español. Debes ser amable, paciente y proporcionar retroalimentación constructiva.'
+        },
         {
             role: 'assistant',
             content: "¡Hola! Soy tu asistente de práctica de español. Te ayudaré a mejorar tu español a través de la conversación. ¿Qué te gustaría practicar hoy? Podemos trabajar en:"
@@ -165,19 +170,19 @@ export default function SpanishPracticePage() {
         let context = '';
         switch (type) {
             case 'Entrevista':
-                context = 'entrevista de trabajo en desarrollo de software';
+                context = 'entrevista';
                 break;
             case 'Gramática':
-                context = 'práctica de gramática';
+                context = 'gramatica';
                 break;
             case 'Vocabulario':
-                context = 'construcción de vocabulario';
+                context = 'vocabulario';
                 break;
             case 'Pronunciación':
-                context = 'consejos de pronunciación';
+                context = 'pronunciacion';
                 break;
             case 'Negocios':
-                context = 'español de negocios';
+                context = 'negocios';
                 break;
         }
 
@@ -185,23 +190,24 @@ export default function SpanishPracticePage() {
             // Verificar límites de uso
             const usageLimits = await challengeService.checkUsageLimits('spanish');
             if (!usageLimits.success) {
-                setError(`[Mensaje]. ${usageLimits.message}`);
-                setLoading(false);
+                setModalMessage(usageLimits.message);
+                setIsModalOpen(true);
+                setError(usageLimits.message);
                 return;
             }
 
-            const result = await openAIService.generateConversation(context, 'intermediate');
+            const result = await openAIService.generateSpanishConversation(context, 'avanzado', messages);
 
             // Verificar si result.conversation existe y tiene elementos
             const assistantMessage = result.conversation && result.conversation.length > 0
                 ? result.conversation[result.conversation.length - 1].content
-                : "I'll help you practice " + context + ". Let's get started!";
+                : "Te ayudaré a practicar " + context + ". Empecemos!";
 
             setMessages(prev => [
                 ...prev,
                 {
                     role: 'user',
-                    content: `I want to practice ${context}.`
+                    content: `Quiero practicar ${context}.`
                 },
                 {
                     role: 'assistant',
@@ -236,7 +242,7 @@ export default function SpanishPracticePage() {
 
         try {
             // Verificar límites de uso
-            const usageLimits = await challengeService.checkUsageLimits('english');
+            const usageLimits = await challengeService.checkUsageLimits('spanish');
             if (!usageLimits.success) {
                 setModalMessage(usageLimits.message);
                 setIsModalOpen(true);
@@ -245,13 +251,18 @@ export default function SpanishPracticePage() {
             }
 
             // Primero verificamos la gramática
-            const grammarResult = await openAIService.checkGrammar(userMessage);
+            const grammarResult = await openAIService.checkSpanishGrammar(userMessage);
 
-            // Luego generamos una conversación basada en el contexto
-            const conversationResult = await openAIService.generateConversation(
+            // Luego generamos una conversación basada en el contexto y el historial
+            const conversationResult = await openAIService.generateSpanishConversation(
                 userMessage,
-                'intermediate'
+                'avanzado',
+                messages
             );
+
+            if (!conversationResult?.conversation?.length) {
+                throw new Error('No se pudo generar una respuesta válida');
+            }
 
             // Procesamos la respuesta
             const feedbackType = grammarResult.errors.length === 0
@@ -265,7 +276,6 @@ export default function SpanishPracticePage() {
                     type: feedbackType,
                     suggestions: [
                         ...grammarResult.suggestions,
-                        // ...conversationResult.vocabulary.map(v => `Vocabulary: ${v.word} - ${v.meaning}`)
                     ]
                 }
             };
@@ -277,7 +287,8 @@ export default function SpanishPracticePage() {
                 stepId: currentStepId,
                 feedback: {
                     type: feedbackType
-                }
+                },
+                type: 'spanish'
             });
             // Incrementamos el stepId para el próximo mensaje
             setCurrentStepId(prev => prev + 1);
@@ -328,7 +339,7 @@ export default function SpanishPracticePage() {
             {/* Mensajes */}
             <div className="flex-1 overflow-y-auto p-4">
                 <div className="max-w-3xl mx-auto">
-                    {messages.map((message, index) => (
+                    {messages.filter(message => message.role !== 'system').map((message, index) => (
                         <div
                             key={index}
                             className={`mb-6 ${message.role === 'assistant' ? 'mr-12' : 'ml-12'}`}
@@ -404,7 +415,7 @@ export default function SpanishPracticePage() {
                     ))}
 
                     {/* Opciones de práctica si no se ha seleccionado ninguna */}
-                    {!conversationStarted && messages.length === 1 && (
+                    {!conversationStarted && messages.length === 2 && (
                         <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             <button
                                 onClick={() => handlePracticeTypeSelection('Entrevista')}
@@ -575,7 +586,30 @@ export default function SpanishPracticePage() {
                 onClose={() => setIsModalOpen(false)}
                 title="Límite de Uso Alcanzado"
             >
-                <p className="text-gray-700">{modalMessage}</p>
+                <div className="space-y-4">
+                    <p className="text-gray-700">{modalMessage}</p>
+                    <p className="text-gray-700">Actualiza tu plan y sigue disfrutando de todos los beneficios</p>
+                    <Link
+                        href="/plans"
+                        className={`inline-flex items-center px-4 py-2 rounded-lg text-white font-medium transition-colors ${isDarkMode ? 'bg-red-500 hover:bg-red-600' : 'bg-red-500 hover:bg-red-600'
+                            }`}
+                    >
+                        Actualizar ahora
+                        <svg
+                            className="ml-2 w-5 h-5"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                        >
+                            <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M13 7l5 5m0 0l-5 5m5-5H6"
+                            />
+                        </svg>
+                    </Link>
+                </div>
             </Modal>
         </div>
     );

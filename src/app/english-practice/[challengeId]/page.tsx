@@ -280,7 +280,8 @@ export default function EnglishPractice() {
         stepId: currentStepId,
         feedback: {
           type: feedbackType
-        }
+        },
+        type: 'english'
       });
       // Incrementamos el stepId para el próximo mensaje
       setCurrentStepId(prev => prev + 1);
@@ -573,7 +574,7 @@ export default function EnglishPractice() {
         </form>
       </div>
 
-      <Modal 
+      <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         title="Límite de Uso Alcanzado"
@@ -583,9 +584,8 @@ export default function EnglishPractice() {
           <p className="text-gray-700">Actualiza tu plan y sigue disfrutando de todos los beneficios</p>
           <Link
             href="/plans"
-            className={`inline-flex items-center px-4 py-2 rounded-lg text-white font-medium transition-colors ${
-              isDarkMode ? 'bg-red-500 hover:bg-red-600' : 'bg-red-500 hover:bg-red-600'
-            }`}
+            className={`inline-flex items-center px-4 py-2 rounded-lg text-white font-medium transition-colors ${isDarkMode ? 'bg-red-500 hover:bg-red-600' : 'bg-red-500 hover:bg-red-600'
+              }`}
           >
             Actualizar ahora
             <svg

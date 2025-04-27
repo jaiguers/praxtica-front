@@ -14,7 +14,7 @@ export interface GrammarCheckResponse {
 
 export interface ConversationResponse {
   conversation: {
-    role: 'user' | 'assistant';
+    role: 'user' | 'assistant' | 'system';
     content: string;
   }[];
   vocabulary: {
@@ -52,6 +52,16 @@ class OpenAIService {
     }
   }
 
+  async checkSpanishGrammar(text: string): Promise<GrammarCheckResponse> {
+    try {
+      const response = await axios.post(`${API_URL}/openai/check-spanish-grammar`, { text });
+      return response.data;
+    } catch (error) {
+      console.error('Error checking spanish grammar:', error);
+      throw error;
+    }
+  }
+
   async generateConversation(
     context: string,
     difficulty: 'beginner' | 'intermediate' | 'advanced' = 'intermediate'
@@ -63,6 +73,28 @@ class OpenAIService {
       return response.data;
     } catch (error) {
       console.error('Error generating conversation:', error);
+      throw error;
+    }
+  }
+
+  async generateSpanishConversation(
+    context: string,
+    difficulty: 'principiante' | 'intermedio' | 'avanzado' = 'intermedio',
+    conversationHistory?: { role: 'user' | 'assistant' | 'system'; content: string; }[]
+  ): Promise<ConversationResponse> {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/openai/generate-spanish-conversation/${context}/${difficulty}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ conversationHistory })
+      });
+      return response.json();
+    } catch (error) {
+      console.error('Error generating Spanish conversation:', error);
       throw error;
     }
   }

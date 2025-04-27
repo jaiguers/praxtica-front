@@ -12,6 +12,7 @@ interface FeedbackPayload {
     feedback: {
         type: string;
     };
+    type: string;
 }
 
 export const challengeService = {
