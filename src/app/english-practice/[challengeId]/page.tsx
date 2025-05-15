@@ -253,7 +253,8 @@ export default function EnglishPractice() {
       // Luego generamos una conversación basada en el contexto
       const conversationResult = await openAIService.generateConversation(
         userMessage,
-        'intermediate'
+        'intermediate',
+        messages
       );
 
       // Procesamos la respuesta

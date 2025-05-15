@@ -252,13 +252,15 @@ export default function SpanishPracticePage() {
 
             // Primero verificamos la gramática
             const grammarResult = await openAIService.checkSpanishGrammar(userMessage);
-
+            console.log('grammarResult', grammarResult);
             // Luego generamos una conversación basada en el contexto y el historial
             const conversationResult = await openAIService.generateSpanishConversation(
                 userMessage,
                 'avanzado',
                 messages
             );
+
+            console.log('conversationResult', conversationResult);
 
             if (!conversationResult?.conversation?.length) {
                 throw new Error('No se pudo generar una respuesta válida');

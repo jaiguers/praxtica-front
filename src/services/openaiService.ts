@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getSession } from 'next-auth/react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
 
@@ -64,11 +65,24 @@ class OpenAIService {
 
   async generateConversation(
     context: string,
-    difficulty: 'beginner' | 'intermediate' | 'advanced' = 'intermediate'
+    difficulty: 'beginner' | 'intermediate' | 'advanced' = 'intermediate',
+    conversationHistory?: { role: 'user' | 'assistant' | 'system'; content: string; }[]
   ): Promise<ConversationResponse> {
     try {
-      const response = await axios.get(`${API_URL}/openai/conversation`, {
-        params: { context, difficulty }
+      const session = await getSession();
+      const token = session?.user?.token;
+
+      if (!token) {
+        throw new Error('No access token available');
+      }
+
+      const response = await axios(`${API_URL}/openai/conversation`, {
+        params: { context, difficulty },
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        data: { conversationHistory }
       });
       return response.data;
     } catch (error) {
@@ -83,8 +97,14 @@ class OpenAIService {
     conversationHistory?: { role: 'user' | 'assistant' | 'system'; content: string; }[]
   ): Promise<ConversationResponse> {
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`${API_URL}/openai/generate-spanish-conversation/${context}/${difficulty}`, {
+      const session = await getSession();
+      const token = session?.user?.token;
+
+      if (!token) {
+        throw new Error('No access token available');
+      }
+
+      const response = await fetch(`${API_URL}/openai/spanish-conversation?context=${context}&difficulty=${difficulty}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
