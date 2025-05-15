@@ -2,6 +2,7 @@
 
 import { useState, useRef } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useSession, signIn, signOut } from 'next-auth/react';
 import { useTheme } from '@/context/ThemeContext';
 
@@ -55,10 +56,13 @@ export default function Navbar() {
           {/* Logo y Menú Desktop */}
           <div className="flex items-center">
             <Link href="/" className="flex items-center">
-              <img
-                src={isDarkMode ? "/images/logo.png" : "/images/logo-dark.png"}
+              <Image
+                src={isDarkMode ? "/images/logo.svg" : "/images/logo-dark.svg"}
                 alt="Practi Logo"
+                width={56}
+                height={56}
                 className="h-10 md:h-14 w-auto"
+                priority
               />
             </Link>
             <div className="hidden md:flex items-center space-x-8 ml-8">
@@ -137,10 +141,12 @@ export default function Navbar() {
                   className="flex items-center cursor-pointer"
                   onClick={() => setIsDropdownOpen(!isDropdownOpen)}
                 >
-                  <img
+                  <Image
                     className="h-8 w-8 rounded-full"
                     src={session.user?.image || ''}
                     alt={session.user?.name || ''}
+                    width={32}
+                    height={32}
                   />
                   {isDropdownOpen && (
                     <div className={`absolute right-0 mt-2 w-48 py-1 rounded-md shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none z-50 ${isDarkMode ? 'bg-gray-800' : 'bg-white'

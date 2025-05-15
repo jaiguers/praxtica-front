@@ -24,6 +24,15 @@ export async function fetchWithAuth(endpoint: string, options: RequestInit = {})
   return response.json();
 }
 
+interface ChallengeUpdateData {
+  title?: string;
+  description?: string;
+  difficulty?: string;
+  category?: string;
+  status?: string;
+  [key: string]: unknown;
+}
+
 export const challengesApi = {
   getAll: async (token: string) => {
     return fetchWithAuth('/challenges', {
@@ -33,7 +42,7 @@ export const challengesApi = {
     });
   },
 
-  update: async (id: string, data: any, token: string) => {
+  update: async (id: string, data: ChallengeUpdateData, token: string) => {
     return fetchWithAuth(`/challenges/${id}`, {
       method: 'PATCH',
       headers: {

@@ -31,7 +31,7 @@ export default function RedeemRanking() {
 
       alert('¡Datos enviados correctamente!');
       setFormData({ nombre: '', celular: '', cedula: '' });
-    } catch (error) {
+    } catch {
       alert('Error al enviar los datos. Por favor, intente nuevamente.');
     } finally {
       setLoading(false);

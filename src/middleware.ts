@@ -25,7 +25,7 @@ export default withAuth(
   },
   {
     callbacks: {
-      authorized: ({ token }) => true,
+      authorized: () => true,
     },
   }
 );
