@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",
+    "@microsoft/clarity": "^1.0.0",
     "@octokit/rest": "^21.1.1",
     "@tailwindcss/aspect-ratio": "^0.4.2",
     "@types/bcryptjs": "^3.0.0",

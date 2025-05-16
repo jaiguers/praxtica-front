@@ -58,7 +58,7 @@ export default function Navbar() {
             <Link href="/" className="flex items-center">
               <Image
                 src={isDarkMode ? "/images/logo.svg" : "/images/logo-dark.svg"}
-                alt="Practi Logo"
+                alt="Praxtica Logo"
                 width={56}
                 height={56}
                 className="h-10 md:h-14 w-auto"

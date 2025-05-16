@@ -4,7 +4,8 @@ import { Inter } from 'next/font/google';
 import AuthProvider from '@/components/AuthProvider';
 import { ThemeProvider } from '@/context/ThemeContext';
 import ClientLayout from '@/components/ClientLayout';
-
+import { GoogleAnalytics } from '@/components/GoogleAnalytics';
+import Clarity from '@/components/Clarity';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
@@ -20,6 +21,8 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${inter.className}`}>
+        <GoogleAnalytics />
+        <Clarity />
         <AuthProvider>
           <ThemeProvider>
             <ClientLayout>{children}</ClientLayout>
