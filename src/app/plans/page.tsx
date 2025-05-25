@@ -2,9 +2,11 @@
 
 import { useTheme } from '@/context/ThemeContext';
 import Link from 'next/link';
+import { signIn, useSession } from 'next-auth/react';
 
 export default function Plans() {
   const { isDarkMode } = useTheme();
+  const { data: session } = useSession();
 
   const getButtonProps = (wompiLink: string) => {
     return {
@@ -28,7 +30,54 @@ export default function Plans() {
         </div>
 
         {/* Planes */}
-        <div className="grid md:grid-cols-3 gap-8 max-w-6xl mx-auto">
+        <div className={`grid gap-8 max-w-7xl mx-auto ${session ? 'md:grid-cols-3' : 'md:grid-cols-4'}`}>
+          {/* Plan Gratuito - Solo visible si no hay sesión */}
+          {!session && (
+            <div className={`rounded-lg ${
+              isDarkMode ? 'bg-gray-800' : 'bg-white'
+            } shadow-lg p-8 transition-transform duration-300 hover:scale-105`}>
+              <h3 className={`text-xl font-semibold mb-4 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                Plan Gratuito
+              </h3>
+              <div className="mb-6">
+                <span className={`text-4xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                  $0
+                </span>
+                <span className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>/siempre</span>
+              </div>
+              <ul className={`mb-8 space-y-3 ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                <li className="flex items-center">
+                  <svg className="w-5 h-5 mr-2 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+                  </svg>
+                  Acceso a 3 desafíos básicos
+                </li>
+                <li className="flex items-center">
+                  <svg className="w-5 h-5 mr-2 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+                  </svg>
+                  Acceso a la comunidad
+                </li>
+                <li className="flex items-center">
+                  <svg className="w-5 h-5 mr-2 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+                  </svg>
+                  Recursos básicos
+                </li>
+              </ul>
+              <button
+                onClick={() => signIn('github')}
+                className={`block w-full py-3 px-4 rounded-lg font-semibold text-center ${
+                  isDarkMode 
+                    ? 'bg-gray-600 text-white hover:bg-gray-700' 
+                    : 'bg-gray-500 text-white hover:bg-gray-600'
+                }`}
+              >
+                Comenzar Gratis
+              </button>
+            </div>
+          )}
+
           {/* Plan Mensual */}
           <div className={`rounded-lg ${
             isDarkMode ? 'bg-gray-800' : 'bg-white'
@@ -100,12 +149,6 @@ export default function Plans() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
                 </svg>
                 Todo lo del plan mensual
-              </li>
-              <li className="flex items-center">
-                <svg className="w-5 h-5 mr-2 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
-                </svg>
-                Una sorpresa
               </li>
               <li className="flex items-center">
                 <svg className="w-5 h-5 mr-2 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -192,4 +235,4 @@ export default function Plans() {
       </div>
     </div>
   );
-} 
+}

@@ -6,7 +6,7 @@ import Script from 'next/script';
 
 declare global {
   interface Window {
-    clarity: (command: string, ...args: any[]) => void;
+    clarity: (command: 'event' | 'consent' | 'set', ...args: string[]) => void;
   }
 }
 
