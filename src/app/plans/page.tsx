@@ -100,7 +100,7 @@ export default function Plans() {
             </h3>
             <div className="mb-6">
               <span className={`text-4xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                $150.000
+                $45.000
               </span>
               <span className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>/mes</span>
             </div>
@@ -149,7 +149,7 @@ export default function Plans() {
             </h3>
             <div className="mb-6">
               <span className={`text-4xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                $700.000
+                $500.000
               </span>
               <span className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>/año</span>
             </div>

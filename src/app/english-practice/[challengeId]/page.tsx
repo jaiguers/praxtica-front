@@ -8,6 +8,9 @@ import { openAIService } from '@/services/openaiService';
 import { challengeService } from '@/services/challengeService';
 import Modal from '@/components/Modal';
 import Link from 'next/link';
+import EnglishProgressChart from '@/components/EnglishProgressChart';
+import { MicrophoneIcon, ChartBarIcon, ClockIcon } from '@heroicons/react/24/outline';
+import { ChevronDownIcon } from '@heroicons/react/24/solid';
 
 interface SpeechRecognition extends EventTarget {
   continuous: boolean;
@@ -62,7 +65,9 @@ interface Message {
   };
 }
 
-type PracticeType = 'interview' | 'grammar' | 'vocabulary' | 'pronunciation' | 'business';
+type PracticeType = 'interview' | 'grammar' | 'vocabulary' | 'pronunciation' | 'business' | 'placement';
+
+type ViewType = 'practice' | 'progress' | 'conversations';
 
 export default function EnglishPractice() {
   const { isDarkMode } = useTheme();
@@ -87,6 +92,8 @@ export default function EnglishPractice() {
   const [currentStepId, setCurrentStepId] = useState(1);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMessage, setModalMessage] = useState('');
+  const [currentView, setCurrentView] = useState<ViewType>('practice');
+  const [conversationsOpen, setConversationsOpen] = useState(false);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -162,6 +169,12 @@ export default function EnglishPractice() {
   };
 
   const handlePracticeTypeSelection = async (type: PracticeType) => {
+    if (type === 'placement') {
+      // Aquí puedes agregar la lógica para el placement test
+      alert('Placement Test feature coming soon!');
+      return;
+    }
+
     setLoading(true);
     setError(null);
     let context = '';
@@ -328,10 +341,108 @@ export default function EnglishPractice() {
     }
   };
 
+  // Datos mock para el gráfico de progreso
+  const progressData = [
+    { skill: 'Pronunciation', score: 19 },
+    { skill: 'Vocabulary', score: 47 },
+    { skill: 'Grammar', score: 20 },
+    { skill: 'Fluency', score: 40 },
+    { skill: 'Clarity', score: 65 },
+  ];
+
+  // Datos mock de conversaciones
+  const conversations = [
+    { id: 1, title: 'Software Development Interview', date: '2024-01-15', duration: '15 min' },
+    { id: 2, title: 'Grammar Practice', date: '2024-01-14', duration: '10 min' },
+    { id: 3, title: 'Vocabulary Building', date: '2024-01-13', duration: '12 min' },
+  ];
+
   return (
-    <div className={`flex flex-col h-[calc(100vh-4rem)] ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
-      {/* Mensajes */}
-      <div className="flex-1 overflow-y-auto p-4">
+    <div className={`flex h-[calc(100vh-4rem)] ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+      {/* Sidebar */}
+      <div className={`w-64 border-r ${isDarkMode ? 'border-gray-700 bg-gray-900' : 'border-gray-200 bg-white'}`}>
+        <div className="p-4 space-y-2">
+          <button
+            onClick={() => setCurrentView('practice')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+              currentView === 'practice'
+                ? isDarkMode
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-blue-500 text-white'
+                : isDarkMode
+                  ? 'text-gray-300 hover:bg-gray-800'
+                  : 'text-gray-700 hover:bg-gray-100'
+            }`}
+          >
+            <MicrophoneIcon className="w-5 h-5" />
+            <span className="font-medium">Practice</span>
+          </button>
+
+          <button
+            onClick={() => setCurrentView('progress')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+              currentView === 'progress'
+                ? isDarkMode
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-blue-500 text-white'
+                : isDarkMode
+                  ? 'text-gray-300 hover:bg-gray-800'
+                  : 'text-gray-700 hover:bg-gray-100'
+            }`}
+          >
+            <ChartBarIcon className="w-5 h-5" />
+            <span className="font-medium">Progress</span>
+          </button>
+
+          <div className="relative">
+            <button
+              onClick={() => setConversationsOpen(!conversationsOpen)}
+              className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg transition-colors ${
+                currentView === 'conversations'
+                  ? isDarkMode
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-blue-500 text-white'
+                  : isDarkMode
+                    ? 'text-gray-300 hover:bg-gray-800'
+                    : 'text-gray-700 hover:bg-gray-100'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <ClockIcon className="w-5 h-5" />
+                <span className="font-medium">Conversations</span>
+              </div>
+              <ChevronDownIcon
+                className={`w-4 h-4 transition-transform ${conversationsOpen ? 'rotate-180' : ''}`}
+              />
+            </button>
+            {conversationsOpen && (
+              <div className={`mt-2 ml-4 space-y-1 border-l-2 ${isDarkMode ? 'border-gray-700' : 'border-gray-200'} pl-4`}>
+                {conversations.map((conv) => (
+                  <button
+                    key={conv.id}
+                    onClick={() => setCurrentView('conversations')}
+                    className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                      isDarkMode
+                        ? 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
+                        : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                    }`}
+                  >
+                    <div className="font-medium">{conv.title}</div>
+                    <div className="text-xs opacity-70">{conv.date} • {conv.duration}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Contenido principal */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {currentView === 'practice' && (
+          <>
+            {/* Mensajes */}
+            <div className="flex-1 overflow-y-auto p-4">
         <div className="max-w-3xl mx-auto">
           {messages.map((message, index) => (
             <div
@@ -470,6 +581,18 @@ export default function EnglishPractice() {
                 <h3 className="font-medium mb-1">Business English</h3>
                 <p className="text-sm opacity-80">Practice professional and business English</p>
               </button>
+
+              <button
+                onClick={() => handlePracticeTypeSelection('placement')}
+                disabled={loading}
+                className={`p-4 rounded-lg text-left transition-all ${isDarkMode
+                  ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                  : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
+                  } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                <h3 className="font-medium mb-1">Take the Placement Test</h3>
+                <p className="text-sm opacity-80">Make a 4 minute call and get your real English level</p>
+              </button>
             </div>
           )}
 
@@ -573,6 +696,48 @@ export default function EnglishPractice() {
             </div>
           </div>
         </form>
+      </div>
+          </>
+        )}
+
+        {currentView === 'progress' && (
+          <div className="flex-1 overflow-y-auto p-6">
+            <div className="max-w-4xl mx-auto">
+              <EnglishProgressChart
+                data={progressData}
+                overallScore={32}
+                level="Intermediate"
+                levelCode="B1"
+                speakingTime={114}
+              />
+            </div>
+          </div>
+        )}
+
+        {currentView === 'conversations' && (
+          <div className="flex-1 overflow-y-auto p-6">
+            <div className="max-w-4xl mx-auto">
+              <h2 className={`text-2xl font-bold mb-6 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                Your Conversations
+              </h2>
+              <div className="space-y-4">
+                {conversations.map((conv) => (
+                  <div
+                    key={conv.id}
+                    className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600' : 'bg-white hover:bg-gray-50'} transition-colors cursor-pointer`}
+                  >
+                    <h3 className={`font-medium mb-1 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                      {conv.title}
+                    </h3>
+                    <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                      {conv.date} • {conv.duration}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       <Modal
