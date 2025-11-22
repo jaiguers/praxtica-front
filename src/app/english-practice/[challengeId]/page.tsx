@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTheme } from '@/context/ThemeContext';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
@@ -56,6 +56,7 @@ export default function EnglishPractice() {
   const [displayedSubtitles, setDisplayedSubtitles] = useState<string>(''); // Texto mostrado gradualmente
   const [showSubtitles, setShowSubtitles] = useState<boolean>(true); // Toggle para CC
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const sessionIdRef = useRef<string | null>(null); // Ref para acceso inmediato al sessionId
   const subtitleAnimationRef = useRef<NodeJS.Timeout | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
@@ -84,6 +85,10 @@ export default function EnglishPractice() {
     scrollToBottom();
   }, [messages]);
 
+  // Sincronizar sessionId con el ref (por si se actualiza directamente el estado)
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   // Efecto para mostrar subtítulos gradualmente
   useEffect(() => {
@@ -153,6 +158,74 @@ export default function EnglishPractice() {
     };
   }, []);
 
+  // Función helper para sincronizar sessionId con el ref
+  const updateSessionId = useCallback((newSessionId: string | null) => {
+    setSessionId(newSessionId);
+    sessionIdRef.current = newSessionId;
+  }, []);
+
+  const handleStopRecording = useCallback(() => {
+    // Detener reproducción de audio
+    if (currentAudioSourceRef.current) {
+      try {
+        currentAudioSourceRef.current.stop();
+      } catch {
+        // Ignorar errores
+      }
+      currentAudioSourceRef.current = null;
+    }
+
+    // Limpiar cola de audio
+    audioQueueRef.current = [];
+    isPlayingAudioRef.current = false;
+    nextPlayTimeRef.current = 0;
+    isUserSpeakingRef.current = false;
+
+    // Desconectar AudioWorkletNode
+    if (audioWorkletNodeRef.current) {
+      audioWorkletNodeRef.current.disconnect();
+      audioWorkletNodeRef.current = null;
+    }
+
+    // Cerrar AudioContext
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(console.error);
+      audioContextRef.current = null;
+    }
+
+    // Cerrar AudioContext de reproducción
+    if (audioPlaybackContextRef.current) {
+      audioPlaybackContextRef.current.close().catch(console.error);
+      audioPlaybackContextRef.current = null;
+    }
+
+    // Detener el stream
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+
+    // Desconectar Socket.IO
+    if (socketRef.current) {
+      socketRef.current.disconnect();
+      socketRef.current = null;
+    }
+
+    setIsRecording(false);
+    setIsTestMode(false);
+    setTimeRemaining(240); // Resetear a valor por defecto
+    setFullSubtitles('');
+    setDisplayedSubtitles('');
+    setShowSubtitles(true);
+    updateSessionId(null);
+    
+    // Cerrar la vista del placement test o práctica y volver a practice
+    setShowPlacementTest(false);
+    setShowPracticeView(false);
+    setPracticeType(null);
+    setCurrentView('practice');
+  }, [updateSessionId]);
+
   // Manejar el cronómetro
   useEffect(() => {
     if (isRecording) {
@@ -189,7 +262,7 @@ export default function EnglishPractice() {
         timerIntervalRef.current = null;
       }
     };
-  }, [isRecording, isTestMode]);
+  }, [isRecording, isTestMode, handleStopRecording]);
 
   const formatTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
@@ -369,7 +442,10 @@ export default function EnglishPractice() {
       socket.on('practice-started', (data) => {
         console.log('Sesión iniciada:', data);
         if (data.sessionId) {
-          setSessionId(data.sessionId);
+          console.log('SessionId recibido del backend:', data.sessionId);
+          updateSessionId(data.sessionId);
+        } else {
+          console.warn('No se recibió sessionId del backend');
         }
       });
 
@@ -426,9 +502,20 @@ export default function EnglishPractice() {
     }
   };
 
-  // Función para convertir Float32Array a base64
-  const float32ArrayToBase64 = (float32Array: Float32Array): string => {
-    const uint8Array = new Uint8Array(float32Array.buffer);
+  // Función para convertir Float32Array a PCM16 (Int16Array) y luego a base64
+  const float32ArrayToPCM16Base64 = (float32Array: Float32Array): string => {
+    // Convertir Float32Array (-1.0 a 1.0) a Int16Array (-32768 a 32767)
+    const int16Array = new Int16Array(float32Array.length);
+    for (let i = 0; i < float32Array.length; i++) {
+      // Clampear el valor entre -1.0 y 1.0, luego escalar a Int16
+      const sample = Math.max(-1, Math.min(1, float32Array[i]));
+      int16Array[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+    }
+    
+    // Convertir Int16Array a Uint8Array (little-endian)
+    const uint8Array = new Uint8Array(int16Array.buffer);
+    
+    // Convertir a base64
     let binary = '';
     for (let i = 0; i < uint8Array.length; i++) {
       binary += String.fromCharCode(uint8Array[i]);
@@ -438,18 +525,40 @@ export default function EnglishPractice() {
 
   // Función para enviar audio a través del Socket.IO
   const sendAudioToSocket = (audioData: Float32Array) => {
-    if (socketRef.current && socketRef.current.connected && sessionId) {
+    // Usar el ref para acceso inmediato al sessionId (sin depender del estado de React)
+    const currentSessionId = sessionIdRef.current;
+    
+    if (socketRef.current && socketRef.current.connected && currentSessionId) {
       try {
-        // Convertir Float32Array a base64
-        const base64Audio = float32ArrayToBase64(audioData);
+        console.log('********** Enviando audio a audio-chunk **********');
+        // Convertir Float32Array a PCM16 base64
+        const base64Audio = float32ArrayToPCM16Base64(audioData);
         
         // Enviar audio chunk
         socketRef.current.emit('audio-chunk', {
-          sessionId: sessionId,
+          sessionId: currentSessionId,
           audio: base64Audio
         });
+        
+        // Log para debugging (solo ocasionalmente para no saturar la consola)
+        if (Math.random() < 0.01) { // ~1% de los chunks
+          console.log('Audio chunk enviado:', {
+            sessionId: currentSessionId,
+            samples: audioData.length,
+            base64Length: base64Audio.length
+          });
+        }
       } catch (error) {
         console.error('Error al enviar audio:', error);
+      }
+    } else {
+      // Logs de debugging para identificar qué condición falla
+      if (!socketRef.current) {
+        console.warn('Socket no inicializado');
+      } else if (!socketRef.current.connected) {
+        console.warn('Socket no conectado');
+      } else if (!currentSessionId) {
+        console.warn('SessionId no disponible. sessionIdRef.current:', currentSessionId);
       }
     }
   };
@@ -473,7 +582,7 @@ export default function EnglishPractice() {
       // Obtener userId de la sesión
       const userId = session?.user?.email || session?.user?.token;
       const currentSessionId = `practice-${practiceType}-${Date.now()}`;
-      setSessionId(currentSessionId);
+      updateSessionId(currentSessionId);
 
       // Determinar el contexto según el tipo de práctica
       let context = '';
@@ -570,7 +679,8 @@ export default function EnglishPractice() {
             playNextAudioChunk();
           }
 
-          // Enviar audio al Socket.IO
+          // Enviar audio al Socket.IO continuamente (el backend necesita el stream completo)
+          console.log('********** Enviando audio sendAudioToSocket **********');
           sendAudioToSocket(audioData);
         }
       };
@@ -610,7 +720,7 @@ export default function EnglishPractice() {
       // Obtener userId de la sesión
       const userId = session?.user?.email || session?.user?.token;
       const currentSessionId = `cefr-test-${Date.now()}`;
-      setSessionId(currentSessionId);
+      updateSessionId(currentSessionId);
 
       // Iniciar práctica en modo test
       socket.emit('start-practice', {
@@ -710,68 +820,6 @@ export default function EnglishPractice() {
       console.error('Error al acceder al micrófono:', error);
       alert('No se pudo acceder al micrófono. Por favor, verifica los permisos.');
     }
-  };
-
-  const handleStopRecording = () => {
-    // Detener reproducción de audio
-    if (currentAudioSourceRef.current) {
-      try {
-        currentAudioSourceRef.current.stop();
-      } catch {
-        // Ignorar errores
-      }
-      currentAudioSourceRef.current = null;
-    }
-
-    // Limpiar cola de audio
-    audioQueueRef.current = [];
-    isPlayingAudioRef.current = false;
-    nextPlayTimeRef.current = 0;
-    isUserSpeakingRef.current = false;
-
-    // Desconectar AudioWorkletNode
-    if (audioWorkletNodeRef.current) {
-      audioWorkletNodeRef.current.disconnect();
-      audioWorkletNodeRef.current = null;
-    }
-
-    // Cerrar AudioContext
-    if (audioContextRef.current) {
-      audioContextRef.current.close().catch(console.error);
-      audioContextRef.current = null;
-    }
-
-    // Cerrar AudioContext de reproducción
-    if (audioPlaybackContextRef.current) {
-      audioPlaybackContextRef.current.close().catch(console.error);
-      audioPlaybackContextRef.current = null;
-    }
-
-    // Detener el stream
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
-    }
-
-    // Desconectar Socket.IO
-    if (socketRef.current) {
-      socketRef.current.disconnect();
-      socketRef.current = null;
-    }
-
-    setIsRecording(false);
-    setIsTestMode(false);
-    setTimeRemaining(240); // Resetear a valor por defecto
-    setFullSubtitles('');
-    setDisplayedSubtitles('');
-    setShowSubtitles(true);
-    setSessionId(null);
-    
-    // Cerrar la vista del placement test o práctica y volver a practice
-    setShowPlacementTest(false);
-    setShowPracticeView(false);
-    setPracticeType(null);
-    setCurrentView('practice');
   };
 
   const handleSkipPlacementTest = () => {
