@@ -238,23 +238,55 @@ export default function EnglishPractice() {
       });
 
       // Recibir audio del asistente
-      socket.on('assistant-audio-chunk', async (data: { audio: string }) => {
+      socket.on('assistant-audio-chunk', async (data: { 
+        sessionId: string; 
+        audio: string; // Base64 PCM16
+        timestamp: number;
+      }) => {
         try {
-          // Decodificar base64 a ArrayBuffer
-          const audioData = Uint8Array.from(atob(data.audio), c => c.charCodeAt(0));
-          const audioBuffer = audioData.buffer;
-
-          // Reproducir audio
           if (!audioPlaybackContextRef.current) {
             audioPlaybackContextRef.current = new AudioContext();
           }
 
           const audioContext = audioPlaybackContextRef.current;
-          const decodedAudio = await audioContext.decodeAudioData(audioBuffer);
+          
+          // Decodificar base64 a ArrayBuffer
+          const base64Audio = data.audio;
+          const binaryString = atob(base64Audio);
+          const audioBytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            audioBytes[i] = binaryString.charCodeAt(i);
+          }
+
+          // Convertir PCM16 (16-bit signed integers) a Float32Array
+          // PCM16 es little-endian, 16-bit signed integers (-32768 a 32767)
+          const int16Array = new Int16Array(audioBytes.buffer);
+          const float32Array = new Float32Array(int16Array.length);
+          
+          // Normalizar de Int16 (-32768 a 32767) a Float32 (-1.0 a 1.0)
+          for (let i = 0; i < int16Array.length; i++) {
+            float32Array[i] = int16Array[i] / 32768.0;
+          }
+
+          // OpenAI Realtime usa 24kHz por defecto
+          const sampleRate = 24000;
+          const frameCount = float32Array.length;
+
+          // Crear AudioBuffer y reproducir
+          const audioBuffer = audioContext.createBuffer(1, frameCount, sampleRate);
+          audioBuffer.getChannelData(0).set(float32Array);
+
           const source = audioContext.createBufferSource();
-          source.buffer = decodedAudio;
+          source.buffer = audioBuffer;
           source.connect(audioContext.destination);
           source.start();
+
+          console.log('Audio reproducido:', {
+            sessionId: data.sessionId,
+            timestamp: data.timestamp,
+            frames: frameCount,
+            duration: (frameCount / sampleRate).toFixed(2) + 's'
+          });
         } catch (error) {
           console.error('Error al reproducir audio del asistente:', error);
         }
