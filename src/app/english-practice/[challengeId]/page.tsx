@@ -3,59 +3,15 @@
 import { useState, useRef, useEffect } from 'react';
 import { useTheme } from '@/context/ThemeContext';
 import { useSession } from 'next-auth/react';
-import { useRouter, useParams } from 'next/navigation';
-import { openAIService } from '@/services/openaiService';
-import { challengeService } from '@/services/challengeService';
+import { useRouter } from 'next/navigation';
 import Modal from '@/components/Modal';
 import Link from 'next/link';
+import Image from 'next/image';
 import EnglishProgressChart from '@/components/EnglishProgressChart';
 import { MicrophoneIcon, ChartBarIcon, ClockIcon } from '@heroicons/react/24/outline';
 import { ChevronDownIcon } from '@heroicons/react/24/solid';
 import io, { Socket } from 'socket.io-client';
 
-interface SpeechRecognition extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start(): void;
-  stop(): void;
-  abort(): void;
-  onresult: ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => void) | null;
-  onerror: ((this: SpeechRecognition, ev: SpeechRecognitionErrorEvent) => void) | null;
-  onend: ((this: SpeechRecognition, ev: Event) => void) | null;
-}
-
-interface SpeechRecognitionEvent extends Event {
-  results: SpeechRecognitionResultList;
-}
-
-interface SpeechRecognitionErrorEvent extends Event {
-  error: string;
-}
-
-interface SpeechRecognitionResultList {
-  length: number;
-  item(index: number): SpeechRecognitionResult;
-  [index: number]: SpeechRecognitionResult;
-}
-
-interface SpeechRecognitionResult {
-  isFinal: boolean;
-  length: number;
-  item(index: number): SpeechRecognitionAlternative;
-  [index: number]: SpeechRecognitionAlternative;
-}
-
-interface SpeechRecognitionAlternative {
-  transcript: string;
-  confidence: number;
-}
-
-declare global {
-  interface Window {
-    webkitSpeechRecognition: new () => SpeechRecognition;
-  }
-}
 
 interface Message {
   role: 'user' | 'assistant';
@@ -74,10 +30,8 @@ export default function EnglishPractice() {
   const { isDarkMode } = useTheme();
   const { data: session, status } = useSession();
   const router = useRouter();
-  const params = useParams();
-  const challengeId = params.challengeId as string;
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
@@ -85,61 +39,40 @@ export default function EnglishPractice() {
     }
   ]);
   const [expandedSuggestions, setExpandedSuggestions] = useState<{ [key: number]: boolean }>({});
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [isListening, setIsListening] = useState(false);
-  const [conversationStarted, setConversationStarted] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [currentStepId, setCurrentStepId] = useState(1);
+  const [loading] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalMessage, setModalMessage] = useState('');
+  const [modalMessage] = useState('');
   const [currentView, setCurrentView] = useState<ViewType>('practice');
   const [conversationsOpen, setConversationsOpen] = useState(false);
   const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null);
   const [activeRecommendationTab, setActiveRecommendationTab] = useState<'pronunciation' | 'vocabulary' | 'grammar' | 'fluency'>('pronunciation');
   const [showPlacementTest, setShowPlacementTest] = useState(false);
+  const [showPracticeView, setShowPracticeView] = useState(false);
+  const [practiceType, setPracticeType] = useState<PracticeType | null>(null);
   const [isRecording, setIsRecording] = useState(false);
-  const [timeRemaining, setTimeRemaining] = useState(240); // 4 minutos en segundos
-  const [subtitles, setSubtitles] = useState<string>('');
+  const [timeRemaining, setTimeRemaining] = useState(240); // Tiempo en segundos (240 para test, 0 para practice)
+  const [isTestMode, setIsTestMode] = useState(false); // true para test (cuenta atrás), false para practice (cuenta adelante)
+  const [fullSubtitles, setFullSubtitles] = useState<string>(''); // Texto completo acumulado
+  const [displayedSubtitles, setDisplayedSubtitles] = useState<string>(''); // Texto mostrado gradualmente
+  const [showSubtitles, setShowSubtitles] = useState<boolean>(true); // Toggle para CC
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const subtitleAnimationRef = useRef<NodeJS.Timeout | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const audioPlaybackContextRef = useRef<AudioContext | null>(null);
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const audioQueueRef = useRef<Array<{ buffer: AudioBuffer; timestamp: number }>>([]);
+  const isPlayingAudioRef = useRef<boolean>(false);
+  const currentAudioSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const nextPlayTimeRef = useRef<number>(0);
+  const isUserSpeakingRef = useRef<boolean>(false);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const initializeSpeechRecognition = () => {
-    if (typeof window !== 'undefined' && 'webkitSpeechRecognition' in window) {
-      const SpeechRecognition = window.webkitSpeechRecognition;
-      recognitionRef.current = new SpeechRecognition();
-      recognitionRef.current.continuous = true;
-      recognitionRef.current.interimResults = true;
-      recognitionRef.current.lang = 'en-US';
-
-      recognitionRef.current.onresult = (event: SpeechRecognitionEvent) => {
-        const transcript = Array.from(event.results)
-          .map((result) => result[0])
-          .map((result) => result.transcript)
-          .join('');
-
-        setInput(transcript);
-      };
-
-      recognitionRef.current.onerror = (event: SpeechRecognitionErrorEvent) => {
-        console.error('Speech recognition error:', event.error);
-        setIsListening(false);
-      };
-
-      recognitionRef.current.onend = () => {
-        setIsListening(false);
-      };
-    }
-  };
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -151,15 +84,56 @@ export default function EnglishPractice() {
     scrollToBottom();
   }, [messages]);
 
+
+  // Efecto para mostrar subtítulos gradualmente
   useEffect(() => {
-    initializeSpeechRecognition();
-  }, []);
+    if (!showSubtitles || !isRecording) {
+      setDisplayedSubtitles('');
+      return;
+    }
+
+    // Limpiar animación anterior si existe
+    if (subtitleAnimationRef.current) {
+      clearInterval(subtitleAnimationRef.current);
+    }
+
+    // Si el texto completo es más largo que el mostrado, animar
+    if (fullSubtitles.length > displayedSubtitles.length) {
+      const targetText = fullSubtitles;
+      let currentIndex = displayedSubtitles.length;
+
+      subtitleAnimationRef.current = setInterval(() => {
+        if (currentIndex < targetText.length) {
+          setDisplayedSubtitles(targetText.substring(0, currentIndex + 1));
+          currentIndex++;
+        } else {
+          if (subtitleAnimationRef.current) {
+            clearInterval(subtitleAnimationRef.current);
+            subtitleAnimationRef.current = null;
+          }
+        }
+      }, 30); // Mostrar un carácter cada 30ms (ajustable para velocidad)
+    } else if (fullSubtitles.length < displayedSubtitles.length) {
+      // Si el texto se redujo (por ejemplo, se reinició), actualizar inmediatamente
+      setDisplayedSubtitles(fullSubtitles);
+    }
+
+    return () => {
+      if (subtitleAnimationRef.current) {
+        clearInterval(subtitleAnimationRef.current);
+        subtitleAnimationRef.current = null;
+      }
+    };
+  }, [fullSubtitles, showSubtitles, isRecording, displayedSubtitles.length]);
 
   // Limpiar recursos al desmontar
   useEffect(() => {
     return () => {
       if (timerIntervalRef.current) {
         clearInterval(timerIntervalRef.current);
+      }
+      if (subtitleAnimationRef.current) {
+        clearInterval(subtitleAnimationRef.current);
       }
       if (audioWorkletNodeRef.current) {
         audioWorkletNodeRef.current.disconnect();
@@ -181,14 +155,25 @@ export default function EnglishPractice() {
 
   // Manejar el cronómetro
   useEffect(() => {
-    if (isRecording && timeRemaining > 0) {
+    if (isRecording) {
+      // Limpiar intervalo anterior si existe
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+      }
+      
       timerIntervalRef.current = setInterval(() => {
         setTimeRemaining((prev) => {
-          if (prev <= 1) {
-            handleStopRecording();
-            return 0;
+          if (isTestMode) {
+            // Modo test: cuenta hacia atrás desde 240 (4 minutos)
+            if (prev <= 1) {
+              handleStopRecording();
+              return 0;
+            }
+            return prev - 1;
+          } else {
+            // Modo practice: cuenta hacia adelante desde 0 (sin límite)
+            return prev + 1;
           }
-          return prev - 1;
         });
       }, 1000);
     } else {
@@ -201,14 +186,155 @@ export default function EnglishPractice() {
     return () => {
       if (timerIntervalRef.current) {
         clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
       }
     };
-  }, [isRecording, timeRemaining]);
+  }, [isRecording, isTestMode]);
 
   const formatTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // Función para convertir PCM16 base64 a AudioBuffer
+  const decodePCM16ToAudioBuffer = (base64Audio: string, sampleRate: number = 24000): AudioBuffer | null => {
+    try {
+      // Decodificar base64 a Uint8Array
+      const binaryString = atob(base64Audio);
+      let audioBytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        audioBytes[i] = binaryString.charCodeAt(i);
+      }
+
+      // Asegurar que el buffer tenga un número par de bytes (PCM16 = 2 bytes por sample)
+      const byteLength = audioBytes.length;
+      if (byteLength % 2 !== 0) {
+        console.warn('Audio buffer tiene longitud impar, truncando último byte');
+        audioBytes = audioBytes.slice(0, byteLength - 1);
+      }
+
+      // Crear Int16Array con alineación correcta (2 bytes por sample)
+      const sampleCount = audioBytes.length / 2;
+      const int16Array = new Int16Array(audioBytes.buffer, audioBytes.byteOffset, sampleCount);
+      
+      // Convertir a Float32Array normalizado (-1.0 a 1.0)
+      const float32Array = new Float32Array(sampleCount);
+      for (let i = 0; i < int16Array.length; i++) {
+        // Normalizar de Int16 (-32768 a 32767) a Float32 (-1.0 a 1.0)
+        float32Array[i] = Math.max(-1, Math.min(1, int16Array[i] / 32768.0));
+      }
+
+      // Crear AudioBuffer
+      if (!audioPlaybackContextRef.current) {
+        audioPlaybackContextRef.current = new AudioContext({ sampleRate });
+      }
+
+      const audioContext = audioPlaybackContextRef.current;
+      const audioBuffer = audioContext.createBuffer(1, sampleCount, sampleRate);
+      audioBuffer.getChannelData(0).set(float32Array);
+
+      return audioBuffer;
+    } catch (error) {
+      console.error('Error al decodificar PCM16:', error);
+      return null;
+    }
+  };
+
+  // Función para reproducir audio de la cola secuencialmente
+  const playNextAudioChunk = () => {
+    if (isUserSpeakingRef.current) {
+      // Si el usuario está hablando, pausar la reproducción
+      if (currentAudioSourceRef.current) {
+        try {
+          currentAudioSourceRef.current.stop();
+        } catch {
+          // Ignorar errores si ya se detuvo
+        }
+        currentAudioSourceRef.current = null;
+      }
+      isPlayingAudioRef.current = false;
+      return;
+    }
+
+    if (audioQueueRef.current.length === 0) {
+      isPlayingAudioRef.current = false;
+      return;
+    }
+
+    if (isPlayingAudioRef.current) {
+      return; // Ya hay un chunk reproduciéndose
+    }
+
+    const chunk = audioQueueRef.current.shift();
+    if (!chunk || !audioPlaybackContextRef.current) {
+      isPlayingAudioRef.current = false;
+      return;
+    }
+
+    try {
+      const audioContext = audioPlaybackContextRef.current;
+      const source = audioContext.createBufferSource();
+      source.buffer = chunk.buffer;
+      source.connect(audioContext.destination);
+
+      // Calcular el tiempo de inicio para evitar gaps
+      const currentTime = audioContext.currentTime;
+      const startTime = Math.max(currentTime, nextPlayTimeRef.current);
+      
+      source.start(startTime);
+      
+      // Calcular cuándo terminará este chunk
+      const duration = chunk.buffer.duration;
+      nextPlayTimeRef.current = startTime + duration;
+
+      currentAudioSourceRef.current = source;
+      isPlayingAudioRef.current = true;
+
+      // Cuando termine este chunk, reproducir el siguiente
+      source.onended = () => {
+        currentAudioSourceRef.current = null;
+        isPlayingAudioRef.current = false;
+        // Reproducir el siguiente chunk
+        setTimeout(() => playNextAudioChunk(), 0);
+      };
+
+      console.log('Audio chunk reproducido:', {
+        frames: chunk.buffer.length,
+        duration: duration.toFixed(3) + 's',
+        startTime: startTime.toFixed(3)
+      });
+    } catch (error) {
+      console.error('Error al reproducir chunk:', error);
+      isPlayingAudioRef.current = false;
+      // Intentar reproducir el siguiente chunk
+      setTimeout(() => playNextAudioChunk(), 0);
+    }
+  };
+
+  // Función para agregar audio a la cola
+  const enqueueAudio = (audioBuffer: AudioBuffer, timestamp: number) => {
+    audioQueueRef.current.push({ buffer: audioBuffer, timestamp });
+    
+    // Si no hay nada reproduciéndose, empezar a reproducir
+    if (!isPlayingAudioRef.current) {
+      playNextAudioChunk();
+    }
+  };
+
+  // Detectar si el usuario está hablando (VAD básico)
+  const detectUserSpeech = (audioData: Float32Array): boolean => {
+    // Calcular el nivel de energía del audio
+    let sum = 0;
+    for (let i = 0; i < audioData.length; i++) {
+      sum += Math.abs(audioData[i]);
+    }
+    const averageLevel = sum / audioData.length;
+    
+    // Threshold para detectar voz (ajustable)
+    const threshold = 0.01; // Ajustar según sea necesario
+    
+    return averageLevel > threshold;
   };
 
   // Función para inicializar Socket.IO
@@ -245,57 +371,40 @@ export default function EnglishPractice() {
       }) => {
         try {
           if (!audioPlaybackContextRef.current) {
-            audioPlaybackContextRef.current = new AudioContext();
+            audioPlaybackContextRef.current = new AudioContext({ sampleRate: 24000 });
           }
 
-          const audioContext = audioPlaybackContextRef.current;
+          // Decodificar PCM16 a AudioBuffer
+          const audioBuffer = decodePCM16ToAudioBuffer(data.audio, 24000);
           
-          // Decodificar base64 a ArrayBuffer
-          const base64Audio = data.audio;
-          const binaryString = atob(base64Audio);
-          const audioBytes = new Uint8Array(binaryString.length);
-          for (let i = 0; i < binaryString.length; i++) {
-            audioBytes[i] = binaryString.charCodeAt(i);
+          if (!audioBuffer) {
+            console.error('No se pudo decodificar el audio');
+            return;
           }
 
-          // Convertir PCM16 (16-bit signed integers) a Float32Array
-          // PCM16 es little-endian, 16-bit signed integers (-32768 a 32767)
-          const int16Array = new Int16Array(audioBytes.buffer);
-          const float32Array = new Float32Array(int16Array.length);
-          
-          // Normalizar de Int16 (-32768 a 32767) a Float32 (-1.0 a 1.0)
-          for (let i = 0; i < int16Array.length; i++) {
-            float32Array[i] = int16Array[i] / 32768.0;
-          }
+          // Agregar a la cola de reproducción
+          enqueueAudio(audioBuffer, data.timestamp);
 
-          // OpenAI Realtime usa 24kHz por defecto
-          const sampleRate = 24000;
-          const frameCount = float32Array.length;
-
-          // Crear AudioBuffer y reproducir
-          const audioBuffer = audioContext.createBuffer(1, frameCount, sampleRate);
-          audioBuffer.getChannelData(0).set(float32Array);
-
-          const source = audioContext.createBufferSource();
-          source.buffer = audioBuffer;
-          source.connect(audioContext.destination);
-          source.start();
-
-          console.log('Audio reproducido:', {
+          console.log('Audio chunk recibido y encolado:', {
             sessionId: data.sessionId,
             timestamp: data.timestamp,
-            frames: frameCount,
-            duration: (frameCount / sampleRate).toFixed(2) + 's'
+            frames: audioBuffer.length,
+            duration: audioBuffer.duration.toFixed(3) + 's',
+            queueLength: audioQueueRef.current.length
           });
         } catch (error) {
-          console.error('Error al reproducir audio del asistente:', error);
+          console.error('Error al procesar audio del asistente:', error);
         }
       });
 
-      // Recibir transcripción del asistente
+      // Recibir transcripción del asistente (delta - texto incremental)
       socket.on('assistant-transcript-delta', (data: { text: string }) => {
-        if (data.text) {
-          setSubtitles(data.text);
+        if (data.text && showSubtitles) {
+          // Acumular el texto completo gradualmente
+          setFullSubtitles(prev => {
+            const newText = prev + data.text;
+            return newText;
+          });
         }
       });
 
@@ -332,6 +441,136 @@ export default function EnglishPractice() {
       } catch (error) {
         console.error('Error al enviar audio:', error);
       }
+    }
+  };
+
+  const handleStartPractice = async () => {
+    try {
+      // Inicializar Socket.IO
+      const socket = initializeSocket();
+      if (!socket) {
+        alert('No se pudo conectar al servidor. Por favor, intenta de nuevo.');
+        return;
+      }
+
+      // Obtener userId de la sesión
+      const userId = session?.user?.email || session?.user?.token;
+      const currentSessionId = `practice-${practiceType}-${Date.now()}`;
+      setSessionId(currentSessionId);
+
+      // Determinar el contexto según el tipo de práctica
+      let context = '';
+      switch (practiceType) {
+        case 'interview':
+          context = 'software development job interview';
+          break;
+        case 'grammar':
+          context = 'grammar practice';
+          break;
+        case 'vocabulary':
+          context = 'vocabulary building';
+          break;
+        case 'pronunciation':
+          context = 'pronunciation tips';
+          break;
+        case 'business':
+          context = 'business English';
+          break;
+        default:
+          context = 'general English practice';
+      }
+
+      // Iniciar práctica en modo practice
+      socket.emit('start-practice', {
+        userId,
+        sessionId: currentSessionId,
+        language: 'english',
+        mode: 'practice', // Modo practice para práctica regular
+        context: context
+      });
+
+      // Obtener acceso al micrófono
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        } 
+      });
+      streamRef.current = stream;
+
+      // Crear AudioContext
+      const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const audioContext = new AudioContextClass({
+        sampleRate: 16000
+      });
+      audioContextRef.current = audioContext;
+
+      // Crear AudioContext para reproducción
+      audioPlaybackContextRef.current = new AudioContext();
+
+      // Cargar y conectar AudioWorklet
+      try {
+        await audioContext.audioWorklet.addModule('/audio-processor.js');
+      } catch (error) {
+        console.error('Error al cargar AudioWorklet:', error);
+        alert('Error al inicializar el procesador de audio. Por favor, recarga la página.');
+        return;
+      }
+
+      // Crear fuente de audio desde el stream
+      const source = audioContext.createMediaStreamSource(stream);
+
+      // Crear AudioWorkletNode
+      const audioWorkletNode = new AudioWorkletNode(audioContext, 'audio-processor');
+      audioWorkletNodeRef.current = audioWorkletNode;
+
+      // Escuchar mensajes del AudioWorkletProcessor
+      audioWorkletNode.port.onmessage = (event) => {
+        if (event.data.type === 'audioData') {
+          const audioData = new Float32Array(event.data.data);
+          
+          // Detectar si el usuario está hablando (VAD)
+          const userIsSpeaking = detectUserSpeech(audioData);
+          isUserSpeakingRef.current = userIsSpeaking;
+
+          // Si el usuario está hablando, pausar el audio del bot
+          if (userIsSpeaking && currentAudioSourceRef.current) {
+            try {
+              currentAudioSourceRef.current.stop();
+              currentAudioSourceRef.current = null;
+              isPlayingAudioRef.current = false;
+              console.log('Audio del bot pausado - usuario hablando');
+            } catch {
+              // Ignorar errores
+            }
+          }
+
+          // Si el usuario dejó de hablar, reanudar reproducción
+          if (!userIsSpeaking && !isPlayingAudioRef.current && audioQueueRef.current.length > 0) {
+            playNextAudioChunk();
+          }
+
+          // Enviar audio al Socket.IO
+          sendAudioToSocket(audioData);
+        }
+      };
+
+      // Conectar el flujo de audio
+      source.connect(audioWorkletNode);
+      audioWorkletNode.connect(audioContext.destination);
+
+      setFullSubtitles('Hi! 👋 I\'m Maria. Let\'s practice together!');
+      setDisplayedSubtitles('');
+      setIsTestMode(false); // Modo practice: cuenta hacia adelante
+      setTimeRemaining(0); // Iniciar en 00:00 para modo practice
+      setIsRecording(true);
+      console.log('Práctica iniciada con AudioWorklet y Socket.IO');
+    } catch (error) {
+      console.error('Error al acceder al micrófono:', error);
+      alert('No se pudo acceder al micrófono. Por favor, verifica los permisos.');
     }
   };
 
@@ -400,10 +639,32 @@ export default function EnglishPractice() {
         if (event.data.type === 'audioData') {
           const audioData = new Float32Array(event.data.data);
           
+          // Detectar si el usuario está hablando (VAD)
+          const userIsSpeaking = detectUserSpeech(audioData);
+          isUserSpeakingRef.current = userIsSpeaking;
+
+          // Si el usuario está hablando, pausar el audio del bot
+          if (userIsSpeaking && currentAudioSourceRef.current) {
+            try {
+              currentAudioSourceRef.current.stop();
+              currentAudioSourceRef.current = null;
+              isPlayingAudioRef.current = false;
+              console.log('Audio del bot pausado - usuario hablando');
+            } catch {
+              // Ignorar errores
+            }
+          }
+
+          // Si el usuario dejó de hablar, reanudar reproducción
+          if (!userIsSpeaking && !isPlayingAudioRef.current && audioQueueRef.current.length > 0) {
+            playNextAudioChunk();
+          }
+
           console.log('Audio procesado:', {
             length: audioData.length,
             sampleRate: event.data.sampleRate,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            userSpeaking: userIsSpeaking
           });
 
           // Enviar audio al Socket.IO
@@ -415,7 +676,10 @@ export default function EnglishPractice() {
       source.connect(audioWorkletNode);
       audioWorkletNode.connect(audioContext.destination);
 
-      setSubtitles('Hi! 👋 I\'m Stacy. We\'ll');
+      setFullSubtitles('Hi! 👋 I\'m Maria. We\'ll');
+      setDisplayedSubtitles('');
+      setIsTestMode(true); // Modo test: cuenta hacia atrás
+      setTimeRemaining(240); // Iniciar en 04:00 para modo test
       setIsRecording(true);
       console.log('Grabación iniciada con AudioWorklet y Socket.IO');
     } catch (error) {
@@ -425,6 +689,22 @@ export default function EnglishPractice() {
   };
 
   const handleStopRecording = () => {
+    // Detener reproducción de audio
+    if (currentAudioSourceRef.current) {
+      try {
+        currentAudioSourceRef.current.stop();
+      } catch {
+        // Ignorar errores
+      }
+      currentAudioSourceRef.current = null;
+    }
+
+    // Limpiar cola de audio
+    audioQueueRef.current = [];
+    isPlayingAudioRef.current = false;
+    nextPlayTimeRef.current = 0;
+    isUserSpeakingRef.current = false;
+
     // Desconectar AudioWorkletNode
     if (audioWorkletNodeRef.current) {
       audioWorkletNodeRef.current.disconnect();
@@ -456,12 +736,17 @@ export default function EnglishPractice() {
     }
 
     setIsRecording(false);
-    setTimeRemaining(240);
-    setSubtitles('');
+    setIsTestMode(false);
+    setTimeRemaining(240); // Resetear a valor por defecto
+    setFullSubtitles('');
+    setDisplayedSubtitles('');
+    setShowSubtitles(true);
     setSessionId(null);
     
-    // Cerrar la vista del placement test y volver a practice
+    // Cerrar la vista del placement test o práctica y volver a practice
     setShowPlacementTest(false);
+    setShowPracticeView(false);
+    setPracticeType(null);
     setCurrentView('practice');
   };
 
@@ -470,7 +755,57 @@ export default function EnglishPractice() {
       handleStopRecording();
     }
     setShowPlacementTest(false);
+    setIsTestMode(false);
     setTimeRemaining(240);
+  };
+
+  const handleSkipPractice = () => {
+    if (isRecording) {
+      handleStopRecording();
+    }
+    setShowPracticeView(false);
+    setIsTestMode(false);
+    setTimeRemaining(240);
+  };
+
+  // Función para obtener el título según el tipo de práctica
+  const getPracticeTitle = (type: PracticeType | null): string => {
+    switch (type) {
+      case 'interview':
+        return 'Software Development Interview';
+      case 'grammar':
+        return 'Grammar Practice';
+      case 'vocabulary':
+        return 'Vocabulary Building';
+      case 'pronunciation':
+        return 'Pronunciation Tips';
+      case 'business':
+        return 'Business English';
+      case 'placement':
+        return 'Assessment Call';
+      default:
+        return 'Practice Call';
+    }
+  };
+
+  // Función para obtener la descripción según el tipo de práctica
+  const getPracticeDescription = (type: PracticeType | null): string => {
+    switch (type) {
+      case 'interview':
+        return 'Practice technical development interviews with AI tutor Maria.';
+      case 'grammar':
+        return 'Focus on grammar rules and structures with personalized feedback.';
+      case 'vocabulary':
+        return 'Learn new words and expressions to expand your vocabulary.';
+      case 'pronunciation':
+        return 'Improve your pronunciation with real-time feedback and tips.';
+      case 'business':
+        return 'Practice professional and business English for workplace communication.';
+      case 'placement':
+        return '4 minutes call with AI tutor to assess your English and identify key growth areas.';
+      default:
+        return 'Practice your English with AI tutor Maria.';
+    }
   };
 
   if (status === 'loading') {
@@ -485,167 +820,20 @@ export default function EnglishPractice() {
     return null;
   }
 
-  const toggleListening = () => {
-    if (!recognitionRef.current) {
-      alert('Speech recognition is not supported in your browser');
-      return;
-    }
-
-    if (isListening) {
-      recognitionRef.current.stop();
-    } else {
-      setInput('');
-      recognitionRef.current.start();
-    }
-    setIsListening(!isListening);
-  };
 
   const handlePracticeTypeSelection = async (type: PracticeType) => {
+    setPracticeType(type);
+    
     if (type === 'placement') {
+      setIsTestMode(true); // Modo test: cuenta hacia atrás
+      setTimeRemaining(240); // Iniciar en 04:00 para test
       setShowPlacementTest(true);
-      setTimeRemaining(240); // Resetear a 4 minutos
-      return;
+    } else {
+      // Para los otros tipos de práctica, mostrar la vista de práctica
+      setIsTestMode(false); // Modo practice: cuenta hacia adelante
+      setTimeRemaining(0); // Iniciar en 00:00 para practice
+      setShowPracticeView(true);
     }
-
-    setLoading(true);
-    setError(null);
-    let context = '';
-    switch (type) {
-      case 'interview':
-        context = 'software development job interview';
-        break;
-      case 'grammar':
-        context = 'grammar practice';
-        break;
-      case 'vocabulary':
-        context = 'vocabulary building';
-        break;
-      case 'pronunciation':
-        context = 'pronunciation tips';
-        break;
-      case 'business':
-        context = 'business English';
-        break;
-    }
-
-    try {
-      // Verificar límites de uso
-      const usageLimits = await challengeService.checkUsageLimits('english');
-      if (!usageLimits.success) {
-        setModalMessage(usageLimits.message);
-        setIsModalOpen(true);
-        setError(usageLimits.message);
-        return;
-      }
-
-      const result = await openAIService.generateConversation(context, 'intermediate');
-
-      // Verificar si result.conversation existe y tiene elementos
-      const assistantMessage = result.conversation && result.conversation.length > 0
-        ? result.conversation[result.conversation.length - 1].content
-        : "I'll help you practice " + context + ". Let's get started!";
-
-      setMessages(prev => [
-        ...prev,
-        {
-          role: 'user',
-          content: `I want to practice ${context}.`
-        },
-        {
-          role: 'assistant',
-          content: assistantMessage
-        }
-      ]);
-
-      setConversationStarted(true);
-      setCurrentStepId(prev => 1 + prev);
-    } catch (error) {
-      console.error('Error:', error);
-      setError('Ocurrió un error al generar la conversación. Por favor, intenta de nuevo.');
-    }
-
-    setLoading(false);
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || loading) return;
-
-    if (isListening) {
-      recognitionRef.current?.stop();
-      setIsListening(false);
-    }
-
-    const userMessage = input.trim();
-    setInput('');
-    setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
-    setLoading(true);
-    setError(null);
-
-    try {
-      // Verificar límites de uso
-      const usageLimits = await challengeService.checkUsageLimits('english');
-      if (!usageLimits.success) {
-        setModalMessage(usageLimits.message);
-        setIsModalOpen(true);
-        setError(usageLimits.message);
-        return;
-      }
-
-      // Primero verificamos la gramática
-      const grammarResult = await openAIService.checkGrammar(userMessage);
-
-      // Luego generamos una conversación basada en el contexto
-      const conversationResult = await openAIService.generateConversation(
-        userMessage,
-        'intermediate',
-        messages
-      );
-
-      // Procesamos la respuesta
-      const feedbackType = grammarResult.errors.length === 0
-        ? 'perfect'
-        : (grammarResult.errors.some(error => error.type === 'grammar') ? 'error' : 'suggestion');
-
-      const assistantMessage: Message = {
-        role: 'assistant',
-        content: conversationResult.conversation[conversationResult.conversation.length - 1].content,
-        feedback: {
-          type: feedbackType,
-          suggestions: [
-            ...grammarResult.suggestions,
-            // ...conversationResult.vocabulary.map(v => `Vocabulary: ${v.word} - ${v.meaning}`)
-          ]
-        }
-      };
-
-      setMessages(prev => [...prev, assistantMessage]);
-
-      // Enviamos el feedback al backend
-      await challengeService.updateChallengeFeedback(challengeId, {
-        stepId: currentStepId,
-        feedback: {
-          type: feedbackType
-        },
-        type: 'english'
-      });
-      // Incrementamos el stepId para el próximo mensaje
-      setCurrentStepId(prev => prev + 1);
-
-    } catch (error) {
-      console.error('Error:', error);
-      setError('Ocurrió un error al generar la conversación. Por favor, intenta de nuevo.');
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: 'Lo siento, hubo un error al procesar tu mensaje. Por favor, intenta de nuevo.',
-        feedback: {
-          type: 'error',
-          suggestions: ['Intenta de nuevo en unos momentos.']
-        }
-      }]);
-    }
-
-    setLoading(false);
   };
 
   const toggleSuggestions = (index: number) => {
@@ -725,100 +913,41 @@ export default function EnglishPractice() {
 
   return (
     <>
-      {/* Vista del Placement Test - Pantalla completa */}
-      {showPlacementTest && (
+      {/* Vista unificada para Placement Test y Práctica - Pantalla completa */}
+      {(showPlacementTest || showPracticeView) && (
         <div className="fixed inset-0 z-50 bg-gradient-to-b from-purple-900 via-purple-950 to-black flex flex-col items-center justify-center">
-          {/* Icono de Closed Captions */}
-          <div className="absolute top-4 right-4">
-            <div className="w-8 h-8 bg-gray-700 rounded flex items-center justify-center">
-              <span className="text-white text-xs font-semibold">CC</span>
+          {/* Avatar de Maria con botón CC */}
+          <div className="mb-8 relative inline-block">
+            <div className="w-32 h-32 rounded-full bg-gradient-to-br from-purple-300 to-purple-400 flex items-center justify-center overflow-hidden shadow-lg">
+              <Image
+                src="/images/maria-avatar.png"
+                alt="Maria"
+                width={128}
+                height={128}
+                className="w-full h-full object-cover rounded-full"
+                priority
+              />
             </div>
-          </div>
-
-          {/* Avatar de Stacy */}
-          <div className="mb-8">
-            <div className="w-32 h-32 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center overflow-hidden">
-              <div className="w-full h-full bg-gray-700 flex items-center justify-center">
-                <svg className="w-20 h-20 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
-                </svg>
-              </div>
+            {/* Icono de Closed Captions - Toggle */}
+            <div className="absolute -top-2 -right-2">
+              <button
+                onClick={() => setShowSubtitles(!showSubtitles)}
+                className={`w-8 h-8 rounded flex items-center justify-center transition-colors ${
+                  showSubtitles 
+                    ? 'bg-blue-600 hover:bg-blue-700' 
+                    : 'bg-gray-700 hover:bg-gray-600'
+                }`}
+                title={showSubtitles ? 'Ocultar subtítulos' : 'Mostrar subtítulos'}
+              >
+                <span className="text-white text-xs font-semibold">CC</span>
+              </button>
             </div>
           </div>
 
           {/* Título */}
           <div className="text-center mb-6">
-            <h2 className="text-3xl font-semibold text-white mb-2">Assessment Call</h2>
-            <p className="text-xl text-gray-300">with Stacy</p>
-          </div>
-
-          {/* Cronómetro */}
-          <div className="mb-8">
-            <div className="w-32 h-32 rounded-full border-4 border-gray-700 flex items-center justify-center bg-gray-900">
-              <span className="text-4xl font-bold text-white">{formatTime(timeRemaining)}</span>
-            </div>
-          </div>
-
-          {/* Descripción */}
-          <p className="text-center text-gray-300 mb-12 max-w-md px-4">
-            4 minutes call with AI tutor to assess your English and identify key growth areas.
-          </p>
-
-          {/* Botones */}
-          <div className="flex gap-4">
-            <button
-              onClick={handleSkipPlacementTest}
-              className="px-8 py-3 rounded-lg bg-gray-800 hover:bg-gray-700 text-white font-medium transition-colors"
-            >
-              Skip for now
-            </button>
-            <button
-              onClick={isRecording ? handleStopRecording : handleStartRecording}
-              className="px-8 py-3 rounded-lg bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-medium transition-all flex items-center gap-2"
-            >
-              {isRecording ? (
-                <>
-                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 012 0v4a1 1 0 11-2 0V7zM12 9a1 1 0 10-2 0v2a1 1 0 102 0V9z" clipRule="evenodd" />
-                  </svg>
-                  Stop Call
-                </>
-              ) : (
-                <>
-                  <MicrophoneIcon className="w-5 h-5" />
-                  Start Call
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Vista del Placement Test - Pantalla completa */}
-      {showPlacementTest && (
-        <div className="fixed inset-0 z-50 bg-gradient-to-b from-purple-900 via-purple-950 to-black flex flex-col items-center justify-center">
-          {/* Icono de Closed Captions */}
-          <div className="absolute top-4 right-4">
-            <div className="w-8 h-8 bg-gray-700 rounded flex items-center justify-center">
-              <span className="text-white text-xs font-semibold">CC</span>
-            </div>
-          </div>
-
-          {/* Avatar de Stacy */}
-          <div className="mb-8">
-            <div className="w-32 h-32 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center overflow-hidden">
-              <div className="w-full h-full bg-gray-700 flex items-center justify-center">
-                <svg className="w-20 h-20 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
-                </svg>
-              </div>
-            </div>
-          </div>
-
-          {/* Título */}
-          <div className="text-center mb-6">
-            <h2 className="text-3xl font-semibold text-white mb-2">Assessment Call</h2>
-            <p className="text-xl text-gray-300">with Stacy</p>
+            <h2 className="text-3xl font-semibold text-white mb-2">{getPracticeTitle(practiceType)}</h2>
+            <p className="text-xl text-gray-300">with Maria</p>
           </div>
 
           {/* Cronómetro */}
@@ -829,13 +958,13 @@ export default function EnglishPractice() {
           </div>
 
           {/* Descripción o Subtítulos */}
-          {isRecording && subtitles ? (
+          {isRecording && showSubtitles && displayedSubtitles ? (
             <p className="text-center text-white text-lg mb-12 max-w-md px-4">
-              {subtitles}
+              {displayedSubtitles}
             </p>
           ) : !isRecording ? (
             <p className="text-center text-gray-300 mb-12 max-w-md px-4">
-              4 minutes call with AI tutor to assess your English and identify key growth areas.
+              {getPracticeDescription(practiceType)}
             </p>
           ) : null}
 
@@ -843,14 +972,14 @@ export default function EnglishPractice() {
           <div className="flex gap-4 items-center justify-center">
             {!isRecording && (
               <button
-                onClick={handleSkipPlacementTest}
+                onClick={showPlacementTest ? handleSkipPlacementTest : handleSkipPractice}
                 className="px-8 py-3 rounded-lg bg-gray-800 hover:bg-gray-700 text-white font-medium transition-colors"
               >
                 Skip for now
               </button>
             )}
             <button
-              onClick={isRecording ? handleStopRecording : handleStartRecording}
+              onClick={isRecording ? handleStopRecording : (showPlacementTest ? handleStartRecording : handleStartPractice)}
               className={`text-white font-medium transition-all flex items-center justify-center ${
                 isRecording
                   ? 'bg-red-600 hover:bg-red-700 w-16 h-16 rounded-lg'
@@ -1041,7 +1170,7 @@ export default function EnglishPractice() {
           ))}
 
           {/* Opciones de práctica si no se ha seleccionado ninguna */}
-          {!conversationStarted && messages.length === 1 && (
+          {!isRecording && messages.length === 1 && (
             <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               <button
                 onClick={() => handlePracticeTypeSelection('interview')}
@@ -1121,103 +1250,6 @@ export default function EnglishPractice() {
         </div>
       </div>
 
-      {/* Formulario de entrada */}
-      <div className={`border-t ${isDarkMode ? 'border-gray-700' : 'border-gray-200'} p-6`}>
-        <form onSubmit={handleSubmit} className="max-w-3xl mx-auto">
-          {error && (
-            <div className={`mb-4 p-4 rounded-lg ${isDarkMode ? 'bg-red-900/50 text-red-200' : 'bg-red-50 text-red-600'}`}>
-              {error}
-            </div>
-          )}
-          <div className="relative">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSubmit(e);
-                }
-              }}
-              placeholder="Escribe tu mensaje en inglés... (Enter para enviar, Shift+Enter para nueva línea)"
-              rows={3}
-              className={`w-full p-4 pr-24 rounded-lg resize-none ${isDarkMode
-                ? 'bg-gray-700 text-white placeholder-gray-400 border-gray-600'
-                : 'bg-white text-gray-900 placeholder-gray-500 border-gray-300'
-                } border focus:outline-none focus:ring-2 focus:ring-blue-500`}
-              disabled={loading || !conversationStarted}
-            />
-            <div className="absolute right-2 top-2 flex gap-2">
-              <button
-                type="button"
-                onClick={toggleListening}
-                className={`p-2 rounded-lg ${isDarkMode
-                  ? isListening
-                    ? 'bg-pink-500 text-white'
-                    : 'bg-gray-600 text-gray-300 hover:text-white'
-                  : isListening
-                    ? 'bg-pink-500 text-white'
-                    : 'bg-gray-100 text-gray-600 hover:text-gray-900'
-                  }`}
-                disabled={!conversationStarted}
-              >
-                <svg
-                  className="h-6 w-6"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
-                  />
-                </svg>
-              </button>
-              <button
-                type="submit"
-                disabled={loading || !conversationStarted}
-                className={`p-2 rounded-lg ${isDarkMode ? 'text-gray-300 hover:text-white' : 'text-gray-600 hover:text-gray-900'
-                  } ${(loading || !conversationStarted) ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                {loading ? (
-                  <svg className="animate-spin h-6 w-6" viewBox="0 0 24 24">
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                      fill="none"
-                    />
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                    />
-                  </svg>
-                ) : (
-                  <svg
-                    className="h-6 w-6"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M13 5l7 7-7 7M5 5l7 7-7 7"
-                    />
-                  </svg>
-                )}
-              </button>
-            </div>
-          </div>
-        </form>
-      </div>
           </>
         )}
 
