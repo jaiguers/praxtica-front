@@ -11,6 +11,7 @@ import Link from 'next/link';
 import EnglishProgressChart from '@/components/EnglishProgressChart';
 import { MicrophoneIcon, ChartBarIcon, ClockIcon } from '@heroicons/react/24/outline';
 import { ChevronDownIcon } from '@heroicons/react/24/solid';
+import io, { Socket } from 'socket.io-client';
 
 interface SpeechRecognition extends EventTarget {
   continuous: boolean;
@@ -94,6 +95,19 @@ export default function EnglishPractice() {
   const [modalMessage, setModalMessage] = useState('');
   const [currentView, setCurrentView] = useState<ViewType>('practice');
   const [conversationsOpen, setConversationsOpen] = useState(false);
+  const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null);
+  const [activeRecommendationTab, setActiveRecommendationTab] = useState<'pronunciation' | 'vocabulary' | 'grammar' | 'fluency'>('pronunciation');
+  const [showPlacementTest, setShowPlacementTest] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [timeRemaining, setTimeRemaining] = useState(240); // 4 minutos en segundos
+  const [subtitles, setSubtitles] = useState<string>('');
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
+  const socketRef = useRef<Socket | null>(null);
+  const audioPlaybackContextRef = useRef<AudioContext | null>(null);
+  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -141,6 +155,292 @@ export default function EnglishPractice() {
     initializeSpeechRecognition();
   }, []);
 
+  // Limpiar recursos al desmontar
+  useEffect(() => {
+    return () => {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+      }
+      if (audioWorkletNodeRef.current) {
+        audioWorkletNodeRef.current.disconnect();
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close().catch(console.error);
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+      if (audioPlaybackContextRef.current) {
+        audioPlaybackContextRef.current.close().catch(console.error);
+      }
+    };
+  }, []);
+
+  // Manejar el cronómetro
+  useEffect(() => {
+    if (isRecording && timeRemaining > 0) {
+      timerIntervalRef.current = setInterval(() => {
+        setTimeRemaining((prev) => {
+          if (prev <= 1) {
+            handleStopRecording();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    } else {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
+    }
+
+    return () => {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+      }
+    };
+  }, [isRecording, timeRemaining]);
+
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // Función para inicializar Socket.IO
+  const initializeSocket = () => {
+    try {
+      const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:5000/realtime-practice';
+      const socket = io(`${socketUrl}`);
+
+      socket.on('connect', () => {
+        console.log('Socket.IO conectado');
+      });
+
+      socket.on('disconnect', () => {
+        console.log('Socket.IO desconectado');
+      });
+
+      socket.on('connect_error', (error) => {
+        console.error('Error de conexión Socket.IO:', error);
+      });
+
+      // Escuchar cuando la sesión esté lista
+      socket.on('practice-started', (data) => {
+        console.log('Sesión iniciada:', data);
+        if (data.sessionId) {
+          setSessionId(data.sessionId);
+        }
+      });
+
+      // Recibir audio del asistente
+      socket.on('assistant-audio-chunk', async (data: { audio: string }) => {
+        try {
+          // Decodificar base64 a ArrayBuffer
+          const audioData = Uint8Array.from(atob(data.audio), c => c.charCodeAt(0));
+          const audioBuffer = audioData.buffer;
+
+          // Reproducir audio
+          if (!audioPlaybackContextRef.current) {
+            audioPlaybackContextRef.current = new AudioContext();
+          }
+
+          const audioContext = audioPlaybackContextRef.current;
+          const decodedAudio = await audioContext.decodeAudioData(audioBuffer);
+          const source = audioContext.createBufferSource();
+          source.buffer = decodedAudio;
+          source.connect(audioContext.destination);
+          source.start();
+        } catch (error) {
+          console.error('Error al reproducir audio del asistente:', error);
+        }
+      });
+
+      // Recibir transcripción del asistente
+      socket.on('assistant-transcript-delta', (data: { text: string }) => {
+        if (data.text) {
+          setSubtitles(data.text);
+        }
+      });
+
+      socketRef.current = socket;
+      return socket;
+    } catch (error) {
+      console.error('Error al inicializar Socket.IO:', error);
+      return null;
+    }
+  };
+
+  // Función para convertir Float32Array a base64
+  const float32ArrayToBase64 = (float32Array: Float32Array): string => {
+    const uint8Array = new Uint8Array(float32Array.buffer);
+    let binary = '';
+    for (let i = 0; i < uint8Array.length; i++) {
+      binary += String.fromCharCode(uint8Array[i]);
+    }
+    return btoa(binary);
+  };
+
+  // Función para enviar audio a través del Socket.IO
+  const sendAudioToSocket = (audioData: Float32Array) => {
+    if (socketRef.current && socketRef.current.connected && sessionId) {
+      try {
+        // Convertir Float32Array a base64
+        const base64Audio = float32ArrayToBase64(audioData);
+        
+        // Enviar audio chunk
+        socketRef.current.emit('audio-chunk', {
+          sessionId: sessionId,
+          audio: base64Audio
+        });
+      } catch (error) {
+        console.error('Error al enviar audio:', error);
+      }
+    }
+  };
+
+  const handleStartRecording = async () => {
+    try {
+      // Inicializar Socket.IO
+      const socket = initializeSocket();
+      if (!socket) {
+        alert('No se pudo conectar al servidor. Por favor, intenta de nuevo.');
+        return;
+      }
+
+      // Obtener userId de la sesión
+      const userId = session?.user?.email || session?.user?.token;
+      const currentSessionId = `cefr-test-${Date.now()}`;
+      setSessionId(currentSessionId);
+
+      // Iniciar práctica en modo test
+      socket.emit('start-practice', {
+        userId,
+        sessionId: currentSessionId,
+        language: 'english',
+        mode: 'test' // Modo test para placement test
+      });
+
+      // Obtener acceso al micrófono
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000, // OpenAI Realtime recomienda 16kHz
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        } 
+      });
+      streamRef.current = stream;
+
+      // Crear AudioContext
+      const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const audioContext = new AudioContextClass({
+        sampleRate: 16000
+      });
+      audioContextRef.current = audioContext;
+
+      // Crear AudioContext para reproducción
+      audioPlaybackContextRef.current = new AudioContext();
+
+      // Cargar y conectar AudioWorklet
+      try {
+        await audioContext.audioWorklet.addModule('/audio-processor.js');
+      } catch (error) {
+        console.error('Error al cargar AudioWorklet:', error);
+        alert('Error al inicializar el procesador de audio. Por favor, recarga la página.');
+        return;
+      }
+
+      // Crear fuente de audio desde el stream
+      const source = audioContext.createMediaStreamSource(stream);
+
+      // Crear AudioWorkletNode
+      const audioWorkletNode = new AudioWorkletNode(audioContext, 'audio-processor');
+      audioWorkletNodeRef.current = audioWorkletNode;
+
+      // Escuchar mensajes del AudioWorkletProcessor
+      audioWorkletNode.port.onmessage = (event) => {
+        if (event.data.type === 'audioData') {
+          const audioData = new Float32Array(event.data.data);
+          
+          console.log('Audio procesado:', {
+            length: audioData.length,
+            sampleRate: event.data.sampleRate,
+            timestamp: new Date().toISOString()
+          });
+
+          // Enviar audio al Socket.IO
+          sendAudioToSocket(audioData);
+        }
+      };
+
+      // Conectar el flujo de audio
+      source.connect(audioWorkletNode);
+      audioWorkletNode.connect(audioContext.destination);
+
+      setSubtitles('Hi! 👋 I\'m Stacy. We\'ll');
+      setIsRecording(true);
+      console.log('Grabación iniciada con AudioWorklet y Socket.IO');
+    } catch (error) {
+      console.error('Error al acceder al micrófono:', error);
+      alert('No se pudo acceder al micrófono. Por favor, verifica los permisos.');
+    }
+  };
+
+  const handleStopRecording = () => {
+    // Desconectar AudioWorkletNode
+    if (audioWorkletNodeRef.current) {
+      audioWorkletNodeRef.current.disconnect();
+      audioWorkletNodeRef.current = null;
+    }
+
+    // Cerrar AudioContext
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(console.error);
+      audioContextRef.current = null;
+    }
+
+    // Cerrar AudioContext de reproducción
+    if (audioPlaybackContextRef.current) {
+      audioPlaybackContextRef.current.close().catch(console.error);
+      audioPlaybackContextRef.current = null;
+    }
+
+    // Detener el stream
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+
+    // Desconectar Socket.IO
+    if (socketRef.current) {
+      socketRef.current.disconnect();
+      socketRef.current = null;
+    }
+
+    setIsRecording(false);
+    setTimeRemaining(240);
+    setSubtitles('');
+    setSessionId(null);
+    
+    // Cerrar la vista del placement test y volver a practice
+    setShowPlacementTest(false);
+    setCurrentView('practice');
+  };
+
+  const handleSkipPlacementTest = () => {
+    if (isRecording) {
+      handleStopRecording();
+    }
+    setShowPlacementTest(false);
+    setTimeRemaining(240);
+  };
+
   if (status === 'loading') {
     return (
       <div className={`min-h-screen ${isDarkMode ? 'bg-gray-900' : 'bg-gray-50'} flex items-center justify-center`}>
@@ -170,8 +470,8 @@ export default function EnglishPractice() {
 
   const handlePracticeTypeSelection = async (type: PracticeType) => {
     if (type === 'placement') {
-      // Aquí puedes agregar la lógica para el placement test
-      alert('Placement Test feature coming soon!');
+      setShowPlacementTest(true);
+      setTimeRemaining(240); // Resetear a 4 minutos
       return;
     }
 
@@ -357,8 +657,190 @@ export default function EnglishPractice() {
     { id: 3, title: 'Vocabulary Building', date: '2024-01-13', duration: '12 min' },
   ];
 
+  // Historiales mock de conversaciones
+  const conversationHistory: { [key: number]: Array<{ role: 'user' | 'assistant'; content: string; timestamp: string }> } = {
+    1: [
+      { role: 'assistant', content: "Hello! I'm your English practice assistant. Let's start with a software development interview. Can you tell me about your experience with version control systems?", timestamp: '00:01' },
+      { role: 'user', content: "I have experience with Git. I use it daily for my projects.", timestamp: '00:17' },
+      { role: 'assistant', content: "Great! Can you explain the difference between Git merge and Git rebase?", timestamp: '00:35' },
+      { role: 'user', content: "Merge combines branches and creates a merge commit, while rebase rewrites history.", timestamp: '00:52' },
+      { role: 'assistant', content: "Excellent explanation! Let's move on to another topic. How do you handle code reviews in your team?", timestamp: '01:10' },
+    ],
+    2: [
+      { role: 'assistant', content: "Welcome to Grammar Practice! Let's work on verb tenses. Can you complete this sentence: 'By next year, I _____ (work) here for five years.'", timestamp: '00:01' },
+      { role: 'user', content: "I will have worked here for five years.", timestamp: '00:20' },
+      { role: 'assistant', content: "Perfect! You used the future perfect tense correctly. Let's try another one.", timestamp: '00:38' },
+      { role: 'user', content: "I'm ready.", timestamp: '00:45' },
+    ],
+    3: [
+      { role: 'assistant', content: "Let's build your vocabulary! Today we'll focus on technical terms. Can you explain what 'refactoring' means?", timestamp: '00:01' },
+      { role: 'user', content: "Refactoring is improving code without changing its functionality.", timestamp: '00:18' },
+      { role: 'assistant', content: "Excellent! That's a precise definition. Now, can you tell me what 'technical debt' means?", timestamp: '00:35' },
+      { role: 'user', content: "Technical debt is when you take shortcuts that need to be fixed later.", timestamp: '00:52' },
+    ],
+  };
+
+  // Recomendaciones mock del tutor
+  const tutorRecommendations = {
+    pronunciation: "Practice sounds /d/ and /tf/. Focus on tricky words like 'changer' to make your speech clearer.",
+    vocabulary: "Use more advanced terms and synonyms like 'simple' and 'straightforward' for precision in your speech.",
+    grammar: "Your grammar shows basic understanding, but frequent errors in Articles and incomplete sentences like 'The boy is.' hinder clarity.",
+    fluency: "Speed up a bit and watch out for 'okay' filler words to help people understand you better.",
+  };
+
+  const selectedConversation = selectedConversationId ? conversations.find(c => c.id === selectedConversationId) : null;
+  const selectedHistory = selectedConversationId ? conversationHistory[selectedConversationId] || [] : [];
+
   return (
-    <div className={`flex h-[calc(100vh-4rem)] ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+    <>
+      {/* Vista del Placement Test - Pantalla completa */}
+      {showPlacementTest && (
+        <div className="fixed inset-0 z-50 bg-gradient-to-b from-purple-900 via-purple-950 to-black flex flex-col items-center justify-center">
+          {/* Icono de Closed Captions */}
+          <div className="absolute top-4 right-4">
+            <div className="w-8 h-8 bg-gray-700 rounded flex items-center justify-center">
+              <span className="text-white text-xs font-semibold">CC</span>
+            </div>
+          </div>
+
+          {/* Avatar de Stacy */}
+          <div className="mb-8">
+            <div className="w-32 h-32 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center overflow-hidden">
+              <div className="w-full h-full bg-gray-700 flex items-center justify-center">
+                <svg className="w-20 h-20 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          {/* Título */}
+          <div className="text-center mb-6">
+            <h2 className="text-3xl font-semibold text-white mb-2">Assessment Call</h2>
+            <p className="text-xl text-gray-300">with Stacy</p>
+          </div>
+
+          {/* Cronómetro */}
+          <div className="mb-8">
+            <div className="w-32 h-32 rounded-full border-4 border-gray-700 flex items-center justify-center bg-gray-900">
+              <span className="text-4xl font-bold text-white">{formatTime(timeRemaining)}</span>
+            </div>
+          </div>
+
+          {/* Descripción */}
+          <p className="text-center text-gray-300 mb-12 max-w-md px-4">
+            4 minutes call with AI tutor to assess your English and identify key growth areas.
+          </p>
+
+          {/* Botones */}
+          <div className="flex gap-4">
+            <button
+              onClick={handleSkipPlacementTest}
+              className="px-8 py-3 rounded-lg bg-gray-800 hover:bg-gray-700 text-white font-medium transition-colors"
+            >
+              Skip for now
+            </button>
+            <button
+              onClick={isRecording ? handleStopRecording : handleStartRecording}
+              className="px-8 py-3 rounded-lg bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-medium transition-all flex items-center gap-2"
+            >
+              {isRecording ? (
+                <>
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 012 0v4a1 1 0 11-2 0V7zM12 9a1 1 0 10-2 0v2a1 1 0 102 0V9z" clipRule="evenodd" />
+                  </svg>
+                  Stop Call
+                </>
+              ) : (
+                <>
+                  <MicrophoneIcon className="w-5 h-5" />
+                  Start Call
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Vista del Placement Test - Pantalla completa */}
+      {showPlacementTest && (
+        <div className="fixed inset-0 z-50 bg-gradient-to-b from-purple-900 via-purple-950 to-black flex flex-col items-center justify-center">
+          {/* Icono de Closed Captions */}
+          <div className="absolute top-4 right-4">
+            <div className="w-8 h-8 bg-gray-700 rounded flex items-center justify-center">
+              <span className="text-white text-xs font-semibold">CC</span>
+            </div>
+          </div>
+
+          {/* Avatar de Stacy */}
+          <div className="mb-8">
+            <div className="w-32 h-32 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center overflow-hidden">
+              <div className="w-full h-full bg-gray-700 flex items-center justify-center">
+                <svg className="w-20 h-20 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          {/* Título */}
+          <div className="text-center mb-6">
+            <h2 className="text-3xl font-semibold text-white mb-2">Assessment Call</h2>
+            <p className="text-xl text-gray-300">with Stacy</p>
+          </div>
+
+          {/* Cronómetro */}
+          <div className="mb-8">
+            <div className="w-32 h-32 rounded-full border-4 border-gray-700 flex items-center justify-center bg-gray-900">
+              <span className="text-4xl font-bold text-white">{formatTime(timeRemaining)}</span>
+            </div>
+          </div>
+
+          {/* Descripción o Subtítulos */}
+          {isRecording && subtitles ? (
+            <p className="text-center text-white text-lg mb-12 max-w-md px-4">
+              {subtitles}
+            </p>
+          ) : !isRecording ? (
+            <p className="text-center text-gray-300 mb-12 max-w-md px-4">
+              4 minutes call with AI tutor to assess your English and identify key growth areas.
+            </p>
+          ) : null}
+
+          {/* Botones */}
+          <div className="flex gap-4 items-center justify-center">
+            {!isRecording && (
+              <button
+                onClick={handleSkipPlacementTest}
+                className="px-8 py-3 rounded-lg bg-gray-800 hover:bg-gray-700 text-white font-medium transition-colors"
+              >
+                Skip for now
+              </button>
+            )}
+            <button
+              onClick={isRecording ? handleStopRecording : handleStartRecording}
+              className={`text-white font-medium transition-all flex items-center justify-center ${
+                isRecording
+                  ? 'bg-red-600 hover:bg-red-700 w-16 h-16 rounded-lg'
+                  : 'px-8 py-3 rounded-lg bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 gap-2'
+              }`}
+            >
+              {isRecording ? (
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="white" style={{ transform: 'rotate(135deg)' }}>
+                  <path fill="white" d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/>
+                </svg>
+              ) : (
+                <>
+                  <MicrophoneIcon className="w-5 h-5" />
+                  Start Call
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className={`flex h-[calc(100vh-4rem)] ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
       {/* Sidebar */}
       <div className={`w-64 border-r ${isDarkMode ? 'border-gray-700 bg-gray-900' : 'border-gray-200 bg-white'}`}>
         <div className="p-4 space-y-2">
@@ -420,11 +902,18 @@ export default function EnglishPractice() {
                 {conversations.map((conv) => (
                   <button
                     key={conv.id}
-                    onClick={() => setCurrentView('conversations')}
+                    onClick={() => {
+                      setCurrentView('conversations');
+                      setSelectedConversationId(conv.id);
+                    }}
                     className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                      isDarkMode
-                        ? 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
-                        : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                      selectedConversationId === conv.id
+                        ? isDarkMode
+                          ? 'bg-blue-600/20 text-blue-300 border border-blue-500'
+                          : 'bg-blue-50 text-blue-700 border border-blue-300'
+                        : isDarkMode
+                          ? 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
+                          : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
                     }`}
                   >
                     <div className="font-medium">{conv.title}</div>
@@ -715,27 +1204,100 @@ export default function EnglishPractice() {
         )}
 
         {currentView === 'conversations' && (
-          <div className="flex-1 overflow-y-auto p-6">
-            <div className="max-w-4xl mx-auto">
-              <h2 className={`text-2xl font-bold mb-6 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                Your Conversations
-              </h2>
-              <div className="space-y-4">
-                {conversations.map((conv) => (
-                  <div
-                    key={conv.id}
-                    className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600' : 'bg-white hover:bg-gray-50'} transition-colors cursor-pointer`}
-                  >
-                    <h3 className={`font-medium mb-1 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                      {conv.title}
-                    </h3>
+          <div className="flex-1 flex overflow-hidden">
+            {/* Área central - Historial de conversación */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {selectedConversation ? (
+                <div className="max-w-3xl mx-auto">
+                  {/* Header de la conversación */}
+                  <div className="mb-6">
+                    <h2 className={`text-2xl font-bold mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                      {selectedConversation.title}
+                    </h2>
                     <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                      {conv.date} • {conv.duration}
+                      {selectedConversation.date} • {selectedConversation.duration} • AI Tutor
                     </p>
                   </div>
-                ))}
-              </div>
+
+                  {/* Historial de mensajes */}
+                  <div className="space-y-4">
+                    {selectedHistory.map((message, index) => (
+                      <div
+                        key={index}
+                        className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                      >
+                        <div className={`max-w-[80%] ${message.role === 'user' ? 'order-2' : 'order-1'}`}>
+                          <div className={`mb-1 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                            {message.role === 'user' ? 'You' : 'AI Tutor'} • {message.timestamp}
+                          </div>
+                          <div
+                            className={`rounded-lg p-4 ${
+                              message.role === 'user'
+                                ? isDarkMode
+                                  ? 'bg-blue-600 text-white'
+                                  : 'bg-blue-500 text-white'
+                                : isDarkMode
+                                  ? 'bg-gray-700 text-white'
+                                  : 'bg-white text-gray-800 border border-gray-200'
+                            }`}
+                          >
+                            <p className="whitespace-pre-wrap">{message.content}</p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="max-w-4xl mx-auto">
+                  <h2 className={`text-2xl font-bold mb-6 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                    Your Conversations
+                  </h2>
+                  <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                    Selecciona una conversación del menú lateral para ver su historial.
+                  </p>
+                </div>
+              )}
             </div>
+
+            {/* Sidebar derecho - Recomendaciones del tutor */}
+            {selectedConversation && (
+              <div className={`w-[500px] border-l ${isDarkMode ? 'border-gray-700 bg-gray-900' : 'border-gray-200 bg-white'} overflow-y-auto`}>
+                <div className="p-6">
+                  <h3 className={`text-lg font-semibold mb-4 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                    Tutor recommendations
+                  </h3>
+
+                  {/* Tabs */}
+                  <div className="flex border-b mb-4" style={{ borderColor: isDarkMode ? '#374151' : '#E5E7EB' }}>
+                    {(['pronunciation', 'vocabulary', 'grammar', 'fluency'] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        onClick={() => setActiveRecommendationTab(tab)}
+                        className={`px-3 py-2 text-sm font-medium capitalize transition-colors ${
+                          activeRecommendationTab === tab
+                            ? isDarkMode
+                              ? 'text-blue-400 border-b-2 border-blue-400'
+                              : 'text-blue-600 border-b-2 border-blue-600'
+                            : isDarkMode
+                              ? 'text-gray-400 hover:text-gray-300'
+                              : 'text-gray-600 hover:text-gray-900'
+                        }`}
+                      >
+                        {tab}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Contenido de recomendaciones */}
+                  <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                    <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                      {tutorRecommendations[activeRecommendationTab]}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -770,6 +1332,7 @@ export default function EnglishPractice() {
           </Link>
         </div>
       </Modal>
-    </div>
+      </div>
+    </>
   );
 } 
