@@ -338,10 +338,20 @@ export default function EnglishPractice() {
   };
 
   // Función para inicializar Socket.IO
-  const initializeSocket = () => {
+  const initializeSocket = (token: string | undefined) => {
     try {
+      if (!token) {
+        console.error('No se proporcionó token para la conexión Socket.IO');
+        return null;
+      }
+
       const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:5000/realtime-practice';
-      const socket = io(`${socketUrl}`);
+      // Usar auth object (recomendado por Socket.IO) para enviar el token
+      const socket = io(socketUrl, {
+        auth: {
+          token: token
+        }
+      });
 
       socket.on('connect', () => {
         console.log('Socket.IO conectado');
@@ -446,8 +456,15 @@ export default function EnglishPractice() {
 
   const handleStartPractice = async () => {
     try {
-      // Inicializar Socket.IO
-      const socket = initializeSocket();
+      // Obtener el token de la sesión
+      const token = session?.user?.token;
+      if (!token) {
+        alert('No se encontró el token de autenticación. Por favor, inicia sesión nuevamente.');
+        return;
+      }
+
+      // Inicializar Socket.IO con el token
+      const socket = initializeSocket(token);
       if (!socket) {
         alert('No se pudo conectar al servidor. Por favor, intenta de nuevo.');
         return;
@@ -576,8 +593,15 @@ export default function EnglishPractice() {
 
   const handleStartRecording = async () => {
     try {
-      // Inicializar Socket.IO
-      const socket = initializeSocket();
+      // Obtener el token de la sesión
+      const token = session?.user?.token;
+      if (!token) {
+        alert('No se encontró el token de autenticación. Por favor, inicia sesión nuevamente.');
+        return;
+      }
+
+      // Inicializar Socket.IO con el token
+      const socket = initializeSocket(token);
       if (!socket) {
         alert('No se pudo conectar al servidor. Por favor, intenta de nuevo.');
         return;
