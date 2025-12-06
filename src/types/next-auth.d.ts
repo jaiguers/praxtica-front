@@ -9,6 +9,10 @@ declare module 'next-auth' {
       image?: string | null;
       token: string;
       ranking: number;
+      languageTests?: {
+        english?: unknown;
+        [key: string]: unknown;
+      };
     }
   }
 
@@ -18,6 +22,10 @@ declare module 'next-auth' {
     image?: string | null;
     token?: string;
     ranking?: number;
+    languageTests?: {
+      english?: unknown;
+      [key: string]: unknown;
+    };
   }
 }
 

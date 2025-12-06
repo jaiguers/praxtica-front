@@ -893,6 +893,9 @@ export default function EnglishPractice() {
   }
 
 
+  // Verificar si el usuario tiene el test de inglés completado
+  const hasEnglishTest = session?.user?.languageTests?.english !== undefined && session?.user?.languageTests?.english !== null;
+
   const handlePracticeTypeSelection = async (type: PracticeType) => {
     setPracticeType(type);
     
@@ -1246,11 +1249,11 @@ export default function EnglishPractice() {
             <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               <button
                 onClick={() => handlePracticeTypeSelection('interview')}
-                disabled={loading}
+                disabled={loading || !hasEnglishTest}
                 className={`p-4 rounded-lg text-left transition-all ${isDarkMode
                   ? 'bg-gray-700 hover:bg-gray-600 text-white'
                   : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
-                  } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  } ${loading || !hasEnglishTest ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 <h3 className="font-medium mb-1">Software Development Interview</h3>
                 <p className="text-sm opacity-80">Practice technical development interviews</p>
@@ -1258,11 +1261,11 @@ export default function EnglishPractice() {
 
               <button
                 onClick={() => handlePracticeTypeSelection('grammar')}
-                disabled={loading}
+                disabled={loading || !hasEnglishTest}
                 className={`p-4 rounded-lg text-left transition-all ${isDarkMode
                   ? 'bg-gray-700 hover:bg-gray-600 text-white'
                   : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
-                  } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  } ${loading || !hasEnglishTest ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 <h3 className="font-medium mb-1">Grammar Practice</h3>
                 <p className="text-sm opacity-80">Focus on grammar rules and structures</p>
@@ -1270,11 +1273,11 @@ export default function EnglishPractice() {
 
               <button
                 onClick={() => handlePracticeTypeSelection('vocabulary')}
-                disabled={loading}
+                disabled={loading || !hasEnglishTest}
                 className={`p-4 rounded-lg text-left transition-all ${isDarkMode
                   ? 'bg-gray-700 hover:bg-gray-600 text-white'
                   : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
-                  } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  } ${loading || !hasEnglishTest ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 <h3 className="font-medium mb-1">Vocabulary Building</h3>
                 <p className="text-sm opacity-80">Learn new words and expressions</p>
@@ -1282,11 +1285,11 @@ export default function EnglishPractice() {
 
               <button
                 onClick={() => handlePracticeTypeSelection('pronunciation')}
-                disabled={loading}
+                disabled={loading || !hasEnglishTest}
                 className={`p-4 rounded-lg text-left transition-all ${isDarkMode
                   ? 'bg-gray-700 hover:bg-gray-600 text-white'
                   : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
-                  } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  } ${loading || !hasEnglishTest ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 <h3 className="font-medium mb-1">Pronunciation Tips</h3>
                 <p className="text-sm opacity-80">Improve your pronunciation</p>
@@ -1294,11 +1297,11 @@ export default function EnglishPractice() {
 
               <button
                 onClick={() => handlePracticeTypeSelection('business')}
-                disabled={loading}
+                disabled={loading || !hasEnglishTest}
                 className={`p-4 rounded-lg text-left transition-all ${isDarkMode
                   ? 'bg-gray-700 hover:bg-gray-600 text-white'
                   : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
-                  } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  } ${loading || !hasEnglishTest ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 <h3 className="font-medium mb-1">Business English</h3>
                 <p className="text-sm opacity-80">Practice professional and business English</p>
@@ -1306,11 +1309,11 @@ export default function EnglishPractice() {
 
               <button
                 onClick={() => handlePracticeTypeSelection('placement')}
-                disabled={loading}
+                disabled={loading || hasEnglishTest}
                 className={`p-4 rounded-lg text-left transition-all ${isDarkMode
                   ? 'bg-gray-700 hover:bg-gray-600 text-white'
                   : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
-                  } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  } ${loading || hasEnglishTest ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 <h3 className="font-medium mb-1">Take the Placement Test</h3>
                 <p className="text-sm opacity-80">Make a 4 minute call and get your real English level</p>
