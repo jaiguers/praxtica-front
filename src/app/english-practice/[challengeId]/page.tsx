@@ -22,6 +22,17 @@ interface Message {
   };
 }
 
+interface TranscriptEntry {
+  role: 'user' | 'assistant';
+  text: string;
+  timestamp: number;
+}
+
+interface AudioUrlEntry {
+  role: 'user' | 'assistant';
+  url: string;
+}
+
 type PracticeType = 'interview' | 'grammar' | 'vocabulary' | 'pronunciation' | 'business' | 'placement';
 
 type ViewType = 'practice' | 'progress' | 'conversations';
@@ -69,6 +80,9 @@ export default function EnglishPractice() {
   const currentAudioSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
   const isUserSpeakingRef = useRef<boolean>(false);
+  const conversationStartTimeRef = useRef<number>(0);
+  const transcriptRef = useRef<TranscriptEntry[]>([]);
+  const audioUrlsRef = useRef<AudioUrlEntry[]>([]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -164,7 +178,72 @@ export default function EnglishPractice() {
     sessionIdRef.current = newSessionId;
   }, []);
 
-  const handleStopRecording = useCallback(() => {
+  // Función para enviar la conversación completa al backend
+  const sendConversationToBackend = useCallback(async () => {
+    const currentSessionId = sessionIdRef.current;
+    const userId = session?.user?.email || session?.user?.token;
+    
+    if (!currentSessionId || !userId) {
+      console.warn('No se puede enviar conversación: falta sessionId o userId');
+      return;
+    }
+
+    const endTime = Date.now();
+    const durationSeconds = Math.floor((endTime - conversationStartTimeRef.current) / 1000);
+
+    const payload = {
+      language: 'english',
+      level: session?.user?.languageTests?.english || 'A1', // Usar el nivel del usuario o A1 por defecto
+      endedAt: new Date(endTime).toISOString(),
+      durationSeconds,
+      feedback: {}, // Será sobrescrito por análisis CEFR en el backend
+      conversationLog: {
+        transcript: transcriptRef.current,
+        audioUrls: audioUrlsRef.current
+      }
+    };
+
+    console.log('========== ENVIANDO CONVERSACIÓN AL BACKEND ==========');
+    console.log('SessionId:', currentSessionId);
+    console.log('UserId:', userId);
+    console.log('Payload:', JSON.stringify(payload, null, 2));
+
+    try {
+      const token = session?.user?.token;
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+      const response = await fetch(
+        `${apiUrl}/api/language/users/${encodeURIComponent(userId)}/practice-sessions/${encodeURIComponent(currentSessionId)}/complete`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify(payload)
+        }
+      );
+
+      const result = await response.json();
+      
+      console.log('========== RESPUESTA DEL BACKEND ==========');
+      console.log('Status:', response.status);
+      console.log('Response:', JSON.stringify(result, null, 2));
+
+      if (!response.ok) {
+        console.error('Error al completar sesión:', result);
+      } else {
+        console.log('✅ Sesión completada exitosamente');
+      }
+    } catch (error) {
+      console.error('========== ERROR AL ENVIAR CONVERSACIÓN ==========');
+      console.error(error);
+    }
+  }, [session]);
+
+  const handleStopRecording = useCallback(async () => {
+    // Enviar conversación al backend antes de limpiar
+    await sendConversationToBackend();
+
     // Detener reproducción de audio
     if (currentAudioSourceRef.current) {
       try {
@@ -211,6 +290,11 @@ export default function EnglishPractice() {
       socketRef.current = null;
     }
 
+    // Limpiar refs de conversación
+    transcriptRef.current = [];
+    audioUrlsRef.current = [];
+    conversationStartTimeRef.current = 0;
+
     setIsRecording(false);
     setIsTestMode(false);
     setTimeRemaining(240); // Resetear a valor por defecto
@@ -224,7 +308,7 @@ export default function EnglishPractice() {
     setShowPracticeView(false);
     setPracticeType(null);
     setCurrentView('practice');
-  }, [updateSessionId]);
+  }, [updateSessionId, sendConversationToBackend]);
 
   // Manejar el cronómetro
   useEffect(() => {
@@ -471,6 +555,13 @@ export default function EnglishPractice() {
           // Agregar a la cola de reproducción
           enqueueAudio(audioBuffer, data.timestamp);
 
+          // Acumular URL de audio del asistente (base64)
+          const audioUrl = `data:audio/pcm;base64,${data.audio}`;
+          audioUrlsRef.current.push({
+            role: 'assistant',
+            url: audioUrl
+          });
+
           console.log('Audio chunk recibido y encolado:', {
             sessionId: data.sessionId,
             timestamp: data.timestamp,
@@ -492,6 +583,38 @@ export default function EnglishPractice() {
             return newText;
           });
         }
+      });
+
+      // Recibir transcripción completa del asistente
+      socket.on('assistant-transcript-complete', (data: { text: string; timestamp: number }) => {
+        console.log('Transcripción completa del asistente:', data);
+        
+        // Acumular en el transcript
+        const relativeTimestamp = conversationStartTimeRef.current > 0 
+          ? data.timestamp - conversationStartTimeRef.current 
+          : data.timestamp;
+        
+        transcriptRef.current.push({
+          role: 'assistant',
+          text: data.text,
+          timestamp: relativeTimestamp
+        });
+      });
+
+      // Recibir transcripción del usuario
+      socket.on('user-transcript', (data: { text: string; timestamp: number }) => {
+        console.log('Transcripción del usuario:', data);
+        
+        // Acumular en el transcript
+        const relativeTimestamp = conversationStartTimeRef.current > 0 
+          ? data.timestamp - conversationStartTimeRef.current 
+          : data.timestamp;
+        
+        transcriptRef.current.push({
+          role: 'user',
+          text: data.text,
+          timestamp: relativeTimestamp
+        });
       });
 
       socketRef.current = socket;
@@ -583,6 +706,9 @@ export default function EnglishPractice() {
       const userId = session?.user?.email || session?.user?.token;
       const currentSessionId = `practice-${practiceType}-${Date.now()}`;
       updateSessionId(currentSessionId);
+
+      // Inicializar timestamp de inicio de conversación
+      conversationStartTimeRef.current = Date.now();
 
       // Determinar el contexto según el tipo de práctica
       let context = '';
@@ -721,6 +847,9 @@ export default function EnglishPractice() {
       const userId = session?.user?.email || session?.user?.token;
       const currentSessionId = `cefr-test-${Date.now()}`;
       updateSessionId(currentSessionId);
+
+      // Inicializar timestamp de inicio de conversación
+      conversationStartTimeRef.current = Date.now();
 
       // Iniciar práctica en modo test
       socket.emit('start-practice', {
@@ -1032,16 +1161,21 @@ export default function EnglishPractice() {
             </div>
           </div>
 
-          {/* Descripción o Subtítulos */}
-          {isRecording && showSubtitles && displayedSubtitles ? (
-            <p className="text-center text-white text-lg mb-12 max-w-md px-4">
-              {displayedSubtitles}
-            </p>
-          ) : !isRecording ? (
-            <p className="text-center text-gray-300 mb-12 max-w-md px-4">
-              {getPracticeDescription(practiceType)}
-            </p>
-          ) : null}
+          {/* Área de Subtítulos con scroll SOLO aquí */}
+          <div className="w-full max-w-2xl px-4 mb-12">
+            {/* Contenedor con altura fija y scroll interno */}
+            <div className="h-[120px] overflow-y-auto scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-transparent">
+              {isRecording && showSubtitles && displayedSubtitles ? (
+                <p className="text-center text-white text-lg px-4">
+                  {displayedSubtitles}
+                </p>
+              ) : !isRecording ? (
+                <p className="text-center text-gray-300 px-4">
+                  {getPracticeDescription(practiceType)}
+                </p>
+              ) : null}
+            </div>
+          </div>
 
           {/* Botones */}
           <div className="flex gap-4 items-center justify-center">
@@ -1057,7 +1191,7 @@ export default function EnglishPractice() {
               onClick={isRecording ? handleStopRecording : (showPlacementTest ? handleStartRecording : handleStartPractice)}
               className={`text-white font-medium transition-all flex items-center justify-center ${
                 isRecording
-                  ? 'bg-red-600 hover:bg-red-700 w-16 h-16 rounded-lg'
+                  ? 'bg-red-600 hover:bg-red-700 w-16 h-16 rounded-full shadow-lg'
                   : 'px-8 py-3 rounded-lg bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 gap-2'
               }`}
             >
