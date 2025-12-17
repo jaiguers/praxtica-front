@@ -11,15 +11,22 @@ interface GitHubProfile {
 interface BackendResponse {
   token: string;
   user: {
+    id: string;
     name: string;
     email: string;
     avatar: string;
     ranking: number;
+    languageTests?: {
+      english?: unknown;
+      [key: string]: unknown;
+    };
   }
 }
 
 let userRanking: number | null = null;
 let userToken: string | null = null;
+let userId: string | null = null;
+let userLanguageTests: { english?: unknown; [key: string]: unknown } | null = null;
 
 const handler = NextAuth({
   providers: [
@@ -61,6 +68,8 @@ const handler = NextAuth({
           const data: BackendResponse = await response.json();
           userRanking = data.user.ranking;
           userToken = data.token;
+          userId = data.user.id;
+          userLanguageTests = data.user.languageTests || null;
           return true;
         } catch (error) {
           console.error('Error al conectar con el backend:', error);
@@ -79,20 +88,30 @@ const handler = NextAuth({
       if (userToken !== null) {
         token.token = userToken;
       }
+      if (userId !== null) {
+        token.id = userId;
+      }
+      if (userLanguageTests !== null) {
+        token.languageTests = userLanguageTests;
+      }
       return token;
     },
     async session({ session, token }) {
       if (!session.user) {
         session.user = {
+          id: token.id as string,
           name: null,
           email: null,
           image: null,
           token: token.token as string,
-          ranking: token.ranking as number
+          ranking: token.ranking as number,
+          languageTests: token.languageTests
         };
       } else {
+        session.user.id = token.id as string;
         session.user.token = token.token as string;
         session.user.ranking = token.ranking as number;
+        session.user.languageTests = token.languageTests;
       }
       session.accessToken = token.accessToken as string;
       return session;

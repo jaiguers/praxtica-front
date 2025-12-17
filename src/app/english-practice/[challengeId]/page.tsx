@@ -11,6 +11,7 @@ import EnglishProgressChart from '@/components/EnglishProgressChart';
 import { MicrophoneIcon, ChartBarIcon, ClockIcon } from '@heroicons/react/24/outline';
 import { ChevronDownIcon } from '@heroicons/react/24/solid';
 import io, { Socket } from 'socket.io-client';
+import { languageService } from '@/services/languageService';
 
 
 interface Message {
@@ -181,7 +182,7 @@ export default function EnglishPractice() {
   // Función para enviar la conversación completa al backend
   const sendConversationToBackend = useCallback(async () => {
     const currentSessionId = sessionIdRef.current;
-    const userId = session?.user?.email || session?.user?.token;
+    const userId = session?.user?.id;
     
     if (!currentSessionId || !userId) {
       console.warn('No se puede enviar conversación: falta sessionId o userId');
@@ -193,14 +194,10 @@ export default function EnglishPractice() {
 
     const payload = {
       language: 'english',
-      level: session?.user?.languageTests?.english || 'A1', // Usar el nivel del usuario o A1 por defecto
+      level: (session?.user?.languageTests?.english as string) || 'A1', // Usar el nivel del usuario o A1 por defecto
       endedAt: new Date(endTime).toISOString(),
       durationSeconds,
       feedback: {}, // Será sobrescrito por análisis CEFR en el backend
-      conversationLog: {
-        transcript: transcriptRef.current,
-        audioUrls: audioUrlsRef.current
-      }
     };
 
     console.log('========== ENVIANDO CONVERSACIÓN AL BACKEND ==========');
@@ -209,31 +206,11 @@ export default function EnglishPractice() {
     console.log('Payload:', JSON.stringify(payload, null, 2));
 
     try {
-      const token = session?.user?.token;
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
-      const response = await fetch(
-        `${apiUrl}/api/language/users/${encodeURIComponent(userId)}/practice-sessions/${encodeURIComponent(currentSessionId)}/complete`,
-        {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify(payload)
-        }
-      );
-
-      const result = await response.json();
+      const result = await languageService.completeSession(userId, currentSessionId, payload);
       
       console.log('========== RESPUESTA DEL BACKEND ==========');
-      console.log('Status:', response.status);
       console.log('Response:', JSON.stringify(result, null, 2));
-
-      if (!response.ok) {
-        console.error('Error al completar sesión:', result);
-      } else {
-        console.log('✅ Sesión completada exitosamente');
-      }
+      console.log('✅ Sesión completada exitosamente');
     } catch (error) {
       console.error('========== ERROR AL ENVIAR CONVERSACIÓN ==========');
       console.error(error);
@@ -576,10 +553,12 @@ export default function EnglishPractice() {
 
       // Recibir transcripción del asistente (delta - texto incremental)
       socket.on('assistant-transcript-delta', (data: { text: string }) => {
+        console.log('📝 Assistant delta:', data.text);
         if (data.text && showSubtitles) {
           // Acumular el texto completo gradualmente
           setFullSubtitles(prev => {
             const newText = prev + data.text;
+            console.log('📝 Full subtitles updated:', newText);
             return newText;
           });
         }
@@ -587,7 +566,7 @@ export default function EnglishPractice() {
 
       // Recibir transcripción completa del asistente
       socket.on('assistant-transcript-complete', (data: { text: string; timestamp: number }) => {
-        console.log('Transcripción completa del asistente:', data);
+        console.log('✅ Assistant transcript complete:', data);
         
         // Acumular en el transcript
         const relativeTimestamp = conversationStartTimeRef.current > 0 
@@ -599,11 +578,16 @@ export default function EnglishPractice() {
           text: data.text,
           timestamp: relativeTimestamp
         });
+        
+        // Limpiar subtítulos cuando el asistente termina de hablar para esperar respuesta del usuario
+        setTimeout(() => {
+          setFullSubtitles('');
+        }, 2000); // Esperar 2 segundos después de que termine de hablar
       });
 
       // Recibir transcripción del usuario
       socket.on('user-transcript', (data: { text: string; timestamp: number }) => {
-        console.log('Transcripción del usuario:', data);
+        console.log('🎤 User transcript:', data);
         
         // Acumular en el transcript
         const relativeTimestamp = conversationStartTimeRef.current > 0 
@@ -615,6 +599,9 @@ export default function EnglishPractice() {
           text: data.text,
           timestamp: relativeTimestamp
         });
+        
+        // Mostrar lo que el usuario está diciendo en los subtítulos
+        setFullSubtitles(`You: ${data.text}`);
       });
 
       socketRef.current = socket;
@@ -703,7 +690,7 @@ export default function EnglishPractice() {
       }
 
       // Obtener userId de la sesión
-      const userId = session?.user?.email || session?.user?.token;
+      const userId = session?.user?.id;
       const currentSessionId = `practice-${practiceType}-${Date.now()}`;
       updateSessionId(currentSessionId);
 
@@ -844,7 +831,7 @@ export default function EnglishPractice() {
       }
 
       // Obtener userId de la sesión
-      const userId = session?.user?.email || session?.user?.token;
+      const userId = session?.user?.id;
       const currentSessionId = `cefr-test-${Date.now()}`;
       updateSessionId(currentSessionId);
 
