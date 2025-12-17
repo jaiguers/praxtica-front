@@ -194,7 +194,7 @@ export default function EnglishPractice() {
 
     const payload = {
       language: 'english',
-      level: (session?.user?.languageTests?.english as string) || 'A1', // Usar el nivel del usuario o A1 por defecto
+      level: '', 
       endedAt: new Date(endTime).toISOString(),
       durationSeconds,
       feedback: {}, // Será sobrescrito por análisis CEFR en el backend
@@ -556,11 +556,7 @@ export default function EnglishPractice() {
         console.log('📝 Assistant delta:', data.text);
         if (data.text && showSubtitles) {
           // Acumular el texto completo gradualmente
-          setFullSubtitles(prev => {
-            const newText = prev + data.text;
-            console.log('📝 Full subtitles updated:', newText);
-            return newText;
-          });
+          setFullSubtitles(prev => prev + data.text);
         }
       });
 
@@ -578,11 +574,6 @@ export default function EnglishPractice() {
           text: data.text,
           timestamp: relativeTimestamp
         });
-        
-        // Limpiar subtítulos cuando el asistente termina de hablar para esperar respuesta del usuario
-        setTimeout(() => {
-          setFullSubtitles('');
-        }, 2000); // Esperar 2 segundos después de que termine de hablar
       });
 
       // Recibir transcripción del usuario
@@ -599,9 +590,6 @@ export default function EnglishPractice() {
           text: data.text,
           timestamp: relativeTimestamp
         });
-        
-        // Mostrar lo que el usuario está diciendo en los subtítulos
-        setFullSubtitles(`You: ${data.text}`);
       });
 
       socketRef.current = socket;
@@ -926,7 +914,7 @@ export default function EnglishPractice() {
       source.connect(audioWorkletNode);
       audioWorkletNode.connect(audioContext.destination);
 
-      setFullSubtitles('Hi! 👋 I\'m Maria. We\'ll');
+      setFullSubtitles('Hello! 👋');
       setDisplayedSubtitles('');
       setIsTestMode(true); // Modo test: cuenta hacia atrás
       setTimeRemaining(240); // Iniciar en 04:00 para modo test
@@ -1148,16 +1136,15 @@ export default function EnglishPractice() {
             </div>
           </div>
 
-          {/* Área de Subtítulos con scroll SOLO aquí */}
+          {/* Área de Subtítulos con altura fija y scroll */}
           <div className="w-full max-w-2xl px-4 mb-12">
-            {/* Contenedor con altura fija y scroll interno */}
-            <div className="h-[120px] overflow-y-auto scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-transparent">
+            <div className="h-24 overflow-y-auto flex items-center justify-center">
               {isRecording && showSubtitles && displayedSubtitles ? (
-                <p className="text-center text-white text-lg px-4">
+                <p className="text-center text-white text-lg px-2">
                   {displayedSubtitles}
                 </p>
               ) : !isRecording ? (
-                <p className="text-center text-gray-300 px-4">
+                <p className="text-center text-gray-300 px-2">
                   {getPracticeDescription(practiceType)}
                 </p>
               ) : null}
