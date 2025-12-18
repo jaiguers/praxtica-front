@@ -69,6 +69,7 @@ export default function EnglishPractice() {
   const [showSubtitles, setShowSubtitles] = useState<boolean>(true); // Toggle para CC
   const [sessionId, setSessionId] = useState<string | null>(null);
   const sessionIdRef = useRef<string | null>(null); // Ref para acceso inmediato al sessionId
+  const isRecordingRef = useRef<boolean>(false); // Ref para acceso inmediato al estado de grabación
   const subtitleAnimationRef = useRef<NodeJS.Timeout | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
@@ -104,6 +105,11 @@ export default function EnglishPractice() {
   useEffect(() => {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
+
+  // Sincronizar isRecording con el ref
+  useEffect(() => {
+    isRecordingRef.current = isRecording;
+  }, [isRecording]);
 
   // Efecto para mostrar subtítulos gradualmente
   useEffect(() => {
@@ -218,66 +224,81 @@ export default function EnglishPractice() {
   }, [session]);
 
   const handleStopRecording = useCallback(async () => {
-    // Enviar conversación al backend antes de limpiar
-    await sendConversationToBackend();
-
-    // Detener reproducción de audio
+    // DETENER TODO EL AUDIO INMEDIATAMENTE
+    // 1. Detener cualquier audio que se esté reproduciendo
     if (currentAudioSourceRef.current) {
       try {
         currentAudioSourceRef.current.stop();
+        currentAudioSourceRef.current.disconnect();
       } catch {
         // Ignorar errores
       }
       currentAudioSourceRef.current = null;
     }
 
-    // Limpiar cola de audio
+    // 2. Limpiar completamente la cola de audio para evitar reproducciones futuras
     audioQueueRef.current = [];
     isPlayingAudioRef.current = false;
     nextPlayTimeRef.current = 0;
     isUserSpeakingRef.current = false;
 
-    // Desconectar AudioWorkletNode
-    if (audioWorkletNodeRef.current) {
-      audioWorkletNodeRef.current.disconnect();
-      audioWorkletNodeRef.current = null;
-    }
-
-    // Cerrar AudioContext
-    if (audioContextRef.current) {
-      audioContextRef.current.close().catch(console.error);
-      audioContextRef.current = null;
-    }
-
-    // Cerrar AudioContext de reproducción
+    // 3. Cerrar inmediatamente el AudioContext de reproducción para detener todo audio
     if (audioPlaybackContextRef.current) {
-      audioPlaybackContextRef.current.close().catch(console.error);
+      try {
+        // Suspender primero para detener cualquier reproducción activa
+        await audioPlaybackContextRef.current.suspend();
+        await audioPlaybackContextRef.current.close();
+      } catch (error) {
+        console.warn('Error al cerrar AudioContext de reproducción:', error);
+      }
       audioPlaybackContextRef.current = null;
     }
 
-    // Detener el stream
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
-    }
-
-    // Desconectar Socket.IO
+    // 4. Desconectar Socket.IO INMEDIATAMENTE para evitar más audio entrante
     if (socketRef.current) {
       socketRef.current.disconnect();
       socketRef.current = null;
     }
 
-    // Limpiar refs de conversación
+    // 5. Desconectar AudioWorkletNode
+    if (audioWorkletNodeRef.current) {
+      audioWorkletNodeRef.current.disconnect();
+      audioWorkletNodeRef.current = null;
+    }
+
+    // 6. Cerrar AudioContext de grabación
+    if (audioContextRef.current) {
+      try {
+        await audioContextRef.current.suspend();
+        await audioContextRef.current.close();
+      } catch (error) {
+        console.warn('Error al cerrar AudioContext de grabación:', error);
+      }
+      audioContextRef.current = null;
+    }
+
+    // 7. Detener el stream del micrófono
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+
+    // 8. Limpiar refs de conversación
     transcriptRef.current = [];
     audioUrlsRef.current = [];
     conversationStartTimeRef.current = 0;
 
+    // 9. Actualizar estados de UI y refs
     setIsRecording(false);
+    isRecordingRef.current = false; // Actualizar ref inmediatamente
     setIsTestMode(false);
     setTimeRemaining(240); // Resetear a valor por defecto
     setFullSubtitles('');
     setDisplayedSubtitles('');
     setShowSubtitles(true);
+
+    // 10. Enviar conversación al backend AL FINAL (después de detener todo)
+    await sendConversationToBackend();
     updateSessionId(null);
     
     // Cerrar la vista del placement test o práctica y volver a practice
@@ -377,6 +398,13 @@ export default function EnglishPractice() {
 
   // Función para reproducir audio de la cola secuencialmente
   const playNextAudioChunk = () => {
+    // VERIFICAR SI LA GRABACIÓN SIGUE ACTIVA - Si no, detener reproducción
+    if (!isRecordingRef.current) {
+      console.log('Deteniendo reproducción - grabación terminada');
+      isPlayingAudioRef.current = false;
+      return;
+    }
+
     if (isUserSpeakingRef.current) {
       // Si el usuario está hablando, pausar la reproducción
       if (currentAudioSourceRef.current) {
@@ -425,24 +453,24 @@ export default function EnglishPractice() {
       currentAudioSourceRef.current = source;
       isPlayingAudioRef.current = true;
 
-      // Cuando termine este chunk, reproducir el siguiente
+      // Cuando termine este chunk, reproducir el siguiente SOLO si sigue grabando
       source.onended = () => {
         currentAudioSourceRef.current = null;
         isPlayingAudioRef.current = false;
-        // Reproducir el siguiente chunk
-        setTimeout(() => playNextAudioChunk(), 0);
+        // Verificar estado antes de continuar
+        if (isRecordingRef.current) {
+          setTimeout(() => playNextAudioChunk(), 0);
+        }
       };
 
-      console.log('Audio chunk reproducido:', {
-        frames: chunk.buffer.length,
-        duration: duration.toFixed(3) + 's',
-        startTime: startTime.toFixed(3)
-      });
+
     } catch (error) {
       console.error('Error al reproducir chunk:', error);
       isPlayingAudioRef.current = false;
-      // Intentar reproducir el siguiente chunk
-      setTimeout(() => playNextAudioChunk(), 0);
+      // Intentar reproducir el siguiente chunk SOLO si sigue grabando
+      if (isRecordingRef.current) {
+        setTimeout(() => playNextAudioChunk(), 0);
+      }
     }
   };
 
@@ -517,8 +545,10 @@ export default function EnglishPractice() {
         timestamp: number;
       }) => {
         try {
-          if (!audioPlaybackContextRef.current) {
-            audioPlaybackContextRef.current = new AudioContext({ sampleRate: 24000 });
+          // VERIFICAR SI LA GRABACIÓN SIGUE ACTIVA - Si no, ignorar el audio
+          if (!isRecordingRef.current || !audioPlaybackContextRef.current) {
+            console.log('Ignorando audio chunk - grabación terminada');
+            return;
           }
 
           // Decodificar PCM16 a AudioBuffer
@@ -526,6 +556,12 @@ export default function EnglishPractice() {
           
           if (!audioBuffer) {
             console.error('No se pudo decodificar el audio');
+            return;
+          }
+
+          // Verificar nuevamente antes de encolar (doble verificación)
+          if (!isRecordingRef.current) {
+            console.log('Ignorando enqueue - grabación terminada');
             return;
           }
 
@@ -539,13 +575,7 @@ export default function EnglishPractice() {
             url: audioUrl
           });
 
-          console.log('Audio chunk recibido y encolado:', {
-            sessionId: data.sessionId,
-            timestamp: data.timestamp,
-            frames: audioBuffer.length,
-            duration: audioBuffer.duration.toFixed(3) + 's',
-            queueLength: audioQueueRef.current.length
-          });
+
         } catch (error) {
           console.error('Error al procesar audio del asistente:', error);
         }
@@ -553,7 +583,6 @@ export default function EnglishPractice() {
 
       // Recibir transcripción del asistente (delta - texto incremental)
       socket.on('assistant-transcript-delta', (data: { text: string }) => {
-        console.log('📝 Assistant delta:', data.text);
         if (data.text && showSubtitles) {
           // Acumular el texto completo gradualmente
           setFullSubtitles(prev => prev + data.text);
@@ -628,7 +657,6 @@ export default function EnglishPractice() {
     
     if (socketRef.current && socketRef.current.connected && currentSessionId) {
       try {
-        console.log('********** Enviando audio a audio-chunk **********');
         // Convertir Float32Array a PCM16 base64
         const base64Audio = float32ArrayToPCM16Base64(audioData);
         
@@ -769,7 +797,6 @@ export default function EnglishPractice() {
               currentAudioSourceRef.current.stop();
               currentAudioSourceRef.current = null;
               isPlayingAudioRef.current = false;
-              console.log('Audio del bot pausado - usuario hablando');
             } catch {
               // Ignorar errores
             }
@@ -781,7 +808,6 @@ export default function EnglishPractice() {
           }
 
           // Enviar audio al Socket.IO continuamente (el backend necesita el stream completo)
-          console.log('********** Enviando audio sendAudioToSocket **********');
           sendAudioToSocket(audioData);
         }
       };
@@ -795,6 +821,7 @@ export default function EnglishPractice() {
       setIsTestMode(false); // Modo practice: cuenta hacia adelante
       setTimeRemaining(0); // Iniciar en 00:00 para modo practice
       setIsRecording(true);
+      isRecordingRef.current = true; // Actualizar ref inmediatamente
       console.log('Práctica iniciada con AudioWorklet y Socket.IO');
     } catch (error) {
       console.error('Error al acceder al micrófono:', error);
@@ -887,7 +914,7 @@ export default function EnglishPractice() {
               currentAudioSourceRef.current.stop();
               currentAudioSourceRef.current = null;
               isPlayingAudioRef.current = false;
-              console.log('Audio del bot pausado - usuario hablando');
+
             } catch {
               // Ignorar errores
             }
@@ -898,12 +925,7 @@ export default function EnglishPractice() {
             playNextAudioChunk();
           }
 
-          console.log('Audio procesado:', {
-            length: audioData.length,
-            sampleRate: event.data.sampleRate,
-            timestamp: new Date().toISOString(),
-            userSpeaking: userIsSpeaking
-          });
+
 
           // Enviar audio al Socket.IO
           sendAudioToSocket(audioData);
@@ -919,6 +941,7 @@ export default function EnglishPractice() {
       setIsTestMode(true); // Modo test: cuenta hacia atrás
       setTimeRemaining(240); // Iniciar en 04:00 para modo test
       setIsRecording(true);
+      isRecordingRef.current = true; // Actualizar ref inmediatamente
       console.log('Grabación iniciada con AudioWorklet y Socket.IO');
     } catch (error) {
       console.error('Error al acceder al micrófono:', error);
