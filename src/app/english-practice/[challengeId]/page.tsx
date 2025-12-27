@@ -11,7 +11,7 @@ import EnglishProgressChart from '@/components/EnglishProgressChart';
 import { MicrophoneIcon, ChartBarIcon, ClockIcon } from '@heroicons/react/24/outline';
 import { ChevronDownIcon } from '@heroicons/react/24/solid';
 import io, { Socket } from 'socket.io-client';
-import { languageService } from '@/services/languageService';
+import { languageService, SessionCompletionResponse } from '@/services/languageService';
 
 
 interface Message {
@@ -68,6 +68,13 @@ export default function EnglishPractice() {
   const [displayedSubtitles, setDisplayedSubtitles] = useState<string>(''); // Texto mostrado gradualmente
   const [showSubtitles, setShowSubtitles] = useState<boolean>(true); // Toggle para CC
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [evaluationData, setEvaluationData] = useState<{
+    level: string;
+    pronunciation: { score: number };
+    grammar: { score: number };
+    vocabulary: { score: number };
+    fluency: { score: number };
+  } | null>(null);
   const sessionIdRef = useRef<string | null>(null); // Ref para acceso inmediato al sessionId
   const isRecordingRef = useRef<boolean>(false); // Ref para acceso inmediato al estado de grabación
   const subtitleAnimationRef = useRef<NodeJS.Timeout | null>(null);
@@ -206,17 +213,23 @@ export default function EnglishPractice() {
       feedback: {}, // Será sobrescrito por análisis CEFR en el backend
     };
 
-    console.log('========== ENVIANDO CONVERSACIÓN AL BACKEND ==========');
-    console.log('SessionId:', currentSessionId);
-    console.log('UserId:', userId);
-    console.log('Payload:', JSON.stringify(payload, null, 2));
-
     try {
-      const result = await languageService.completeSession(userId, currentSessionId, payload);
+      const result: SessionCompletionResponse = await languageService.completeSession(userId, currentSessionId, payload);
       
       console.log('========== RESPUESTA DEL BACKEND ==========');
       console.log('Response:', JSON.stringify(result, null, 2));
       console.log('✅ Sesión completada exitosamente');
+
+      // Almacenar datos de evaluación si están disponibles
+      if (result.level && result.pronunciation?.score !== undefined && result.grammar?.score !== undefined && result.vocabulary?.score !== undefined && result.fluency?.score !== undefined) {
+        setEvaluationData({
+          level: result.level,
+          pronunciation: { score: result.pronunciation.score },
+          grammar: { score: result.grammar.score },
+          vocabulary: { score: result.vocabulary.score },
+          fluency: { score: result.fluency.score }
+        });
+      }
     } catch (error) {
       console.error('========== ERROR AL ENVIAR CONVERSACIÓN ==========');
       console.error(error);
@@ -531,7 +544,6 @@ export default function EnglishPractice() {
       socket.on('practice-started', (data) => {
         console.log('Sesión iniciada:', data);
         if (data.sessionId) {
-          console.log('SessionId recibido del backend:', data.sessionId);
           updateSessionId(data.sessionId);
         } else {
           console.warn('No se recibió sessionId del backend');
@@ -591,7 +603,6 @@ export default function EnglishPractice() {
 
       // Recibir transcripción completa del asistente
       socket.on('assistant-transcript-complete', (data: { text: string; timestamp: number }) => {
-        console.log('✅ Assistant transcript complete:', data);
         
         // Acumular en el transcript
         const relativeTimestamp = conversationStartTimeRef.current > 0 
@@ -607,7 +618,6 @@ export default function EnglishPractice() {
 
       // Recibir transcripción del usuario
       socket.on('user-transcript', (data: { text: string; timestamp: number }) => {
-        console.log('🎤 User transcript:', data);
         
         // Acumular en el transcript
         const relativeTimestamp = conversationStartTimeRef.current > 0 
@@ -666,14 +676,6 @@ export default function EnglishPractice() {
           audio: base64Audio
         });
         
-        // Log para debugging (solo ocasionalmente para no saturar la consola)
-        if (Math.random() < 0.01) { // ~1% de los chunks
-          console.log('Audio chunk enviado:', {
-            sessionId: currentSessionId,
-            samples: audioData.length,
-            base64Length: base64Audio.length
-          });
-        }
       } catch (error) {
         console.error('Error al enviar audio:', error);
       }
@@ -822,7 +824,6 @@ export default function EnglishPractice() {
       setTimeRemaining(0); // Iniciar en 00:00 para modo practice
       setIsRecording(true);
       isRecordingRef.current = true; // Actualizar ref inmediatamente
-      console.log('Práctica iniciada con AudioWorklet y Socket.IO');
     } catch (error) {
       console.error('Error al acceder al micrófono:', error);
       alert('No se pudo acceder al micrófono. Por favor, verifica los permisos.');
@@ -942,7 +943,6 @@ export default function EnglishPractice() {
       setTimeRemaining(240); // Iniciar en 04:00 para modo test
       setIsRecording(true);
       isRecordingRef.current = true; // Actualizar ref inmediatamente
-      console.log('Grabación iniciada con AudioWorklet y Socket.IO');
     } catch (error) {
       console.error('Error al acceder al micrófono:', error);
       alert('No se pudo acceder al micrófono. Por favor, verifica los permisos.');
@@ -1063,13 +1063,42 @@ export default function EnglishPractice() {
     }
   };
 
-  // Datos mock para el gráfico de progreso
-  const progressData = [
-    { skill: 'Pronunciation', score: 19 },
-    { skill: 'Vocabulary', score: 47 },
-    { skill: 'Grammar', score: 20 },
-    { skill: 'Fluency', score: 40 },
-    { skill: 'Clarity', score: 65 },
+  // Función para obtener la descripción del nivel
+  const getLevelDescription = (level: string): string => {
+    switch (level) {
+      case 'A1': return 'Beginner';
+      case 'A2': return 'Basic';
+      case 'B1': return 'Intermediate';
+      case 'B2': return 'Upper-Intermediate';
+      case 'C1': return 'Advanced';
+      case 'C2': return 'Expert';
+      default: return 'Intermediate';
+    }
+  };
+
+  // Función para obtener el score general basado en los scores individuales
+  const getOverallScore = (data: typeof evaluationData): number => {
+    if (!data) return 0; // Valor por defecto en cero
+    const scores = [
+      data.pronunciation.score,
+      data.grammar.score,
+      data.vocabulary.score,
+      data.fluency.score
+    ];
+    return Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length);
+  };
+
+  // Datos para el gráfico de progreso (dinámicos o mock)
+  const progressData = evaluationData ? [
+    { skill: 'Pronunciation', score: evaluationData.pronunciation.score },
+    { skill: 'Vocabulary', score: evaluationData.vocabulary.score },
+    { skill: 'Grammar', score: evaluationData.grammar.score },
+    { skill: 'Fluency', score: evaluationData.fluency.score },
+  ] : [
+    { skill: 'Pronunciation', score: 0 },
+    { skill: 'Vocabulary', score: 0 },
+    { skill: 'Grammar', score: 0 },
+    { skill: 'Fluency', score: 0 },
   ];
 
   // Datos mock de conversaciones
@@ -1464,9 +1493,9 @@ export default function EnglishPractice() {
             <div className="max-w-4xl mx-auto">
               <EnglishProgressChart
                 data={progressData}
-                overallScore={32}
-                level="Intermediate"
-                levelCode="B1"
+                overallScore={getOverallScore(evaluationData)}
+                level={evaluationData ? getLevelDescription(evaluationData.level) : "Intermediate"}
+                levelCode={evaluationData ? evaluationData.level : "B1"}
                 speakingTime={114}
               />
             </div>

@@ -39,7 +39,6 @@ const CommentSection = ({ contextId }: CommentSectionProps) => {
 
   useEffect(() => {
     // Aquí harías fetch de los comentarios para contextId
-    console.log(`Cargando comentarios para: ${contextId}`);
     setLoading(true);
     // Simular carga
     setTimeout(() => {
@@ -60,9 +59,6 @@ const CommentSection = ({ contextId }: CommentSectionProps) => {
       votes: 1,
       parentId,
     };
-
-    // Aquí enviarías el newComment al backend
-    console.log('Enviando comentario:', newComment);
 
     // Actualizar UI optimistamente (o esperar respuesta del backend)
     if (parentId) {

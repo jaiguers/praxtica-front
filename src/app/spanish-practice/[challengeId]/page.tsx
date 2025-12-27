@@ -260,8 +260,6 @@ export default function SpanishPracticePage() {
                 messages
             );
 
-            console.log('conversationResult', conversationResult);
-
             if (!conversationResult?.conversation?.length) {
                 throw new Error('No se pudo generar una respuesta válida');
             }

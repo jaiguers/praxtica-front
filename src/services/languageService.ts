@@ -12,6 +12,19 @@ export interface SessionCompletionResponse {
   success: boolean;
   sessionId: string;
   analysis?: Record<string, unknown>;
+  level?: string;
+  pronunciation?: {
+    score: number;
+  };
+  grammar?: {
+    score: number;
+  };
+  vocabulary?: {
+    score: number;
+  };
+  fluency?: {
+    score: number;
+  };
   [key: string]: unknown;
 }
 
