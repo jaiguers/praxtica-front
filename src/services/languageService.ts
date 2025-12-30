@@ -25,6 +25,14 @@ export interface SessionCompletionResponse {
   fluency?: {
     score: number;
   };
+  conversationLog?: {
+    transcript: Array<{
+      role: 'user' | 'assistant';
+      text: string;
+      timestamp: number;
+    }>;
+    audioUrls: Array<any>;
+  };
   [key: string]: unknown;
 }
 

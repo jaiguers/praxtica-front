@@ -230,10 +230,73 @@ export default function EnglishPractice() {
           fluency: { score: result.fluency.score }
         });
       }
+
+      // Procesar conversationLog si está disponible
+      if (result.conversationLog?.transcript && Array.isArray(result.conversationLog.transcript)) {
+        // Generar un nuevo ID para la conversación
+        const newConversationId = Math.max(...conversations.map(c => c.id), 0) + 1;
+        
+        // Determinar el título basado en el tipo de práctica
+        let title = 'English Practice';
+        if (practiceType === 'placement') {
+          title = 'Assessment Call';
+        } else if (practiceType === 'interview') {
+          title = 'Software Development Interview';
+        } else if (practiceType === 'grammar') {
+          title = 'Grammar Practice';
+        } else if (practiceType === 'vocabulary') {
+          title = 'Vocabulary Building';
+        } else if (practiceType === 'pronunciation') {
+          title = 'Pronunciation Tips';
+        } else if (practiceType === 'business') {
+          title = 'Business English';
+        }
+
+        // Función para convertir timestamp numérico a formato MM:SS
+        const formatTimestamp = (timestamp: number): string => {
+          const startTime = conversationStartTimeRef.current;
+          const relativeTime = startTime > 0 ? timestamp - startTime : timestamp;
+          const seconds = Math.floor(relativeTime / 1000);
+          const minutes = Math.floor(seconds / 60);
+          const remainingSeconds = seconds % 60;
+          return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+        };
+
+        // Convertir transcript del backend al formato del frontend
+        const formattedTranscript = result.conversationLog.transcript.map((entry: any) => ({
+          role: entry.role,
+          content: entry.text, // Cambiar 'text' a 'content'
+          timestamp: formatTimestamp(entry.timestamp)
+        }));
+
+        // Agregar nueva conversación a la lista
+        const newConversation = {
+          id: newConversationId,
+          title: title,
+          date: new Date().toISOString().split('T')[0], // Formato YYYY-MM-DD
+          duration: `${Math.floor(durationSeconds / 60)} min`
+        };
+
+        // Actualizar la lista de conversaciones
+        setConversations(prev => [newConversation, ...prev]);
+
+        // Agregar el historial de la conversación
+        setConversationHistory(prev => ({
+          ...prev,
+          [newConversationId]: formattedTranscript
+        }));
+
+        console.log('✅ Conversación agregada al historial:', {
+          id: newConversationId,
+          title: title,
+          transcriptLength: formattedTranscript.length
+        });
+      }
     } catch (error) {
       console.error('========== ERROR AL ENVIAR CONVERSACIÓN ==========');
       console.error(error);
     }
+  
   }, [session]);
 
   const handleStopRecording = useCallback(async () => {
@@ -1101,15 +1164,14 @@ export default function EnglishPractice() {
     { skill: 'Fluency', score: 0 },
   ];
 
-  // Datos mock de conversaciones
-  const conversations = [
+  // Estados para conversaciones
+  const [conversations, setConversations] = useState([
     { id: 1, title: 'Software Development Interview', date: '2024-01-15', duration: '15 min' },
     { id: 2, title: 'Grammar Practice', date: '2024-01-14', duration: '10 min' },
     { id: 3, title: 'Vocabulary Building', date: '2024-01-13', duration: '12 min' },
-  ];
+  ]);
 
-  // Historiales mock de conversaciones
-  const conversationHistory: { [key: number]: Array<{ role: 'user' | 'assistant'; content: string; timestamp: string }> } = {
+  const [conversationHistory, setConversationHistory] = useState<{ [key: number]: Array<{ role: 'user' | 'assistant'; content: string; timestamp: string }> }>({
     1: [
       { role: 'assistant', content: "Hello! I'm your English practice assistant. Let's start with a software development interview. Can you tell me about your experience with version control systems?", timestamp: '00:01' },
       { role: 'user', content: "I have experience with Git. I use it daily for my projects.", timestamp: '00:17' },
@@ -1129,7 +1191,7 @@ export default function EnglishPractice() {
       { role: 'assistant', content: "Excellent! That's a precise definition. Now, can you tell me what 'technical debt' means?", timestamp: '00:35' },
       { role: 'user', content: "Technical debt is when you take shortcuts that need to be fixed later.", timestamp: '00:52' },
     ],
-  };
+  });
 
   // Recomendaciones mock del tutor
   const tutorRecommendations = {
