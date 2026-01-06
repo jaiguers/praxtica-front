@@ -70,10 +70,46 @@ export default function EnglishPractice() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [evaluationData, setEvaluationData] = useState<{
     level: string;
-    pronunciation: { score: number };
-    grammar: { score: number };
-    vocabulary: { score: number };
-    fluency: { score: number };
+    pronunciation: { 
+      score: number;
+      mispronouncedWords?: Array<{
+        word: string;
+        attempts: number;
+        lastHeard: string;
+        ipa: string;
+        notes: string;
+      }>;
+    };
+    grammar: { 
+      score: number;
+      errors?: Array<{
+        type: string;
+        example: string;
+        correction: string;
+        notes: string;
+      }>;
+    };
+    vocabulary: { 
+      score: number;
+      rareWordsUsed?: string[];
+      repeatedWords?: string[];
+      suggestedWords?: string[];
+    };
+    fluency: { 
+      score: number;
+      wordsPerMinute?: number;
+      nativeRange?: {
+        min: number;
+        max: number;
+      };
+      pausesPerMinute?: number;
+      fillerWordsCount?: number;
+      fillerWordsRatio?: number;
+      mostUsedWords?: Array<{
+        word: string;
+        count: number;
+      }>;
+    };
   } | null>(null);
   const sessionIdRef = useRef<string | null>(null); // Ref para acceso inmediato al sessionId
   const isRecordingRef = useRef<boolean>(false); // Ref para acceso inmediato al estado de grabación
@@ -224,10 +260,29 @@ export default function EnglishPractice() {
       if (result.level && result.pronunciation?.score !== undefined && result.grammar?.score !== undefined && result.vocabulary?.score !== undefined && result.fluency?.score !== undefined) {
         setEvaluationData({
           level: result.level,
-          pronunciation: { score: result.pronunciation.score },
-          grammar: { score: result.grammar.score },
-          vocabulary: { score: result.vocabulary.score },
-          fluency: { score: result.fluency.score }
+          pronunciation: { 
+            score: result.pronunciation.score,
+            mispronouncedWords: result.pronunciation.mispronouncedWords || []
+          },
+          grammar: { 
+            score: result.grammar.score,
+            errors: result.grammar.errors || []
+          },
+          vocabulary: { 
+            score: result.vocabulary.score,
+            rareWordsUsed: result.vocabulary.rareWordsUsed || [],
+            repeatedWords: result.vocabulary.repeatedWords || [],
+            suggestedWords: result.vocabulary.suggestedWords || []
+          },
+          fluency: { 
+            score: result.fluency.score,
+            wordsPerMinute: result.fluency.wordsPerMinute,
+            nativeRange: result.fluency.nativeRange,
+            pausesPerMinute: result.fluency.pausesPerMinute,
+            fillerWordsCount: result.fluency.fillerWordsCount,
+            fillerWordsRatio: result.fluency.fillerWordsRatio,
+            mostUsedWords: result.fluency.mostUsedWords || []
+          }
         });
       }
 

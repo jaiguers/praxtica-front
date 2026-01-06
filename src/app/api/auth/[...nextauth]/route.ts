@@ -1,11 +1,20 @@
 import NextAuth from 'next-auth';
 import GithubProvider from 'next-auth/providers/github';
+import GoogleProvider from 'next-auth/providers/google';
 
 interface GitHubProfile {
   id: string;
   email: string;
   name: string;
+  login:string;
   avatar_url: string;
+}
+
+interface GoogleProfile {
+  sub: string;
+  email: string;
+  name: string;
+  picture: string;
 }
 
 interface BackendResponse {
@@ -39,6 +48,10 @@ const handler = NextAuth({
         },
       },
     }),
+    GoogleProvider({
+      clientId: process.env.GOOGLE_ID!,
+      clientSecret: process.env.GOOGLE_SECRET!,
+    }),
   ],
   callbacks: {
     async signIn({ user, account, profile }) {
@@ -52,6 +65,41 @@ const handler = NextAuth({
             },
             body: JSON.stringify({
               githubId: githubProfile.id,
+              email: user.email,
+              username: githubProfile.login,
+              name: user.name,
+              avatar: user.image,
+              accessToken: account.access_token,
+            }),
+          });
+
+          if (!response.ok) {
+            console.error('Error al registrar usuario en el backend');
+            return false;
+          }
+
+          const data: BackendResponse = await response.json();
+          userRanking = data.user.ranking;
+          userToken = data.token;
+          userId = data.user.id;
+          userLanguageTests = data.user.languageTests || null;
+          return true;
+        } catch (error) {
+          console.error('Error al conectar con el backend:', error);
+          return false;
+        }
+      }
+
+      if (account?.provider === 'google') {
+        try {
+          const googleProfile = profile as GoogleProfile;
+          const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/gmail`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              googleId: googleProfile.sub,
               email: user.email,
               username: user.name,
               name: user.name,
@@ -76,6 +124,7 @@ const handler = NextAuth({
           return false;
         }
       }
+
       return true;
     },
     async jwt({ token, account }) {

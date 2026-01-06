@@ -8,6 +8,14 @@ export interface SessionCompletionPayload {
   feedback: Record<string, unknown>;
 }
 
+export interface MispronouncedWord {
+  word: string;
+  attempts: number;
+  lastHeard: string;
+  ipa: string;
+  notes: string;
+}
+
 export interface SessionCompletionResponse {
   success: boolean;
   sessionId: string;
@@ -15,15 +23,37 @@ export interface SessionCompletionResponse {
   level?: string;
   pronunciation?: {
     score: number;
+    mispronouncedWords?: MispronouncedWord[];
   };
   grammar?: {
     score: number;
+    errors?: Array<{
+      type: string;
+      example: string;
+      correction: string;
+      notes: string;
+    }>;
   };
   vocabulary?: {
     score: number;
+    rareWordsUsed?: string[];
+    repeatedWords?: string[];
+    suggestedWords?: string[];
   };
   fluency?: {
     score: number;
+    wordsPerMinute?: number;
+    nativeRange?: {
+      min: number;
+      max: number;
+    };
+    pausesPerMinute?: number;
+    fillerWordsCount?: number;
+    fillerWordsRatio?: number;
+    mostUsedWords?: Array<{
+      word: string;
+      count: number;
+    }>;
   };
   conversationLog?: {
     transcript: Array<{
