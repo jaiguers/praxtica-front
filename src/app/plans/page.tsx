@@ -10,10 +10,10 @@ export default function Plans() {
   const { isDarkMode } = useTheme();
   const [isSignInModalOpen, setIsSignInModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [loadingProvider, setLoadingProvider] = useState<string>('');
+  const [loadingProvider, setLoadingProvider] = useState<'github' | 'google' | ''>('');
   const [openFAQ, setOpenFAQ] = useState<number | null>(null);
 
-  const handleSignIn = async (provider: 'github' | 'google' | 'microsoft') => {
+  const handleSignIn = async (provider: 'github' | 'google') => {
     setIsLoading(true);
     setLoadingProvider(provider);
     try {
@@ -415,6 +415,7 @@ export default function Plans() {
                         {loadingProvider === 'google' ? 'Iniciando sesión...' : 'Iniciar Sesión con Google'}
                       </button>
                       
+                      {/* Comentado temporalmente - Microsoft OAuth no implementado aún
                       <button
                         onClick={() => handleSignIn('microsoft')}
                         disabled={isLoading}
@@ -439,6 +440,7 @@ export default function Plans() {
                         )}
                         {loadingProvider === 'microsoft' ? 'Iniciando sesión...' : 'Iniciar Sesión con Microsoft'}
                       </button>
+                      */}
                     </div>
                   </div>
                 </div>

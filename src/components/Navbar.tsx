@@ -12,7 +12,7 @@ export default function Navbar() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSignInModalOpen, setIsSignInModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [loadingProvider, setLoadingProvider] = useState<string>('');
+  const [loadingProvider, setLoadingProvider] = useState<'github' | 'google' | ''>('');
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { isDarkMode, toggleDarkMode } = useTheme();
 
@@ -22,7 +22,7 @@ export default function Navbar() {
     await signOut({ redirect: true, callbackUrl: '/' });
   };
 
-  const handleSignIn = async (provider: 'github' | 'google' | 'microsoft') => {
+  const handleSignIn = async (provider: 'github' | 'google') => {
     setIsLoading(true);
     setLoadingProvider(provider);
     try {
@@ -286,7 +286,8 @@ export default function Navbar() {
                          {loadingProvider === 'google' ? 'Iniciando sesión...' : 'Iniciar Sesión con Google'}
                        </button>
                       
-                                             <button
+                       {/* Comentado temporalmente - Microsoft OAuth no implementado aún
+                       <button
                          onClick={() => handleSignIn('microsoft')}
                          disabled={isLoading}
                          className={`w-full flex items-center justify-center px-4 py-3 border border-gray-300 rounded-lg text-gray-700 bg-white hover:bg-gray-50 transition-colors ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -306,6 +307,7 @@ export default function Navbar() {
                          )}
                          {loadingProvider === 'microsoft' ? 'Iniciando sesión...' : 'Iniciar Sesión con Microsoft'}
                        </button>
+                       */}
                     </div>
                   </div>
                 </div>
