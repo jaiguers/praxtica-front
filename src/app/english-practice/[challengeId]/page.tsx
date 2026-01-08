@@ -58,6 +58,7 @@ export default function EnglishPractice() {
   const [conversationsOpen, setConversationsOpen] = useState(false);
   const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null);
   const [activeRecommendationTab, setActiveRecommendationTab] = useState<'pronunciation' | 'vocabulary' | 'grammar' | 'fluency'>('pronunciation');
+  const [expandedGrammarErrors, setExpandedGrammarErrors] = useState<{ [key: number]: boolean }>({});
   const [showPlacementTest, setShowPlacementTest] = useState(false);
   const [showPracticeView, setShowPracticeView] = useState(false);
   const [practiceType, setPracticeType] = useState<PracticeType | null>(null);
@@ -1156,11 +1157,89 @@ export default function EnglishPractice() {
     }
   };
 
+  // Función para alternar la expansión de errores de gramática
+  const toggleGrammarError = (index: number) => {
+    setExpandedGrammarErrors(prev => ({
+      ...prev,
+      [index]: !prev[index]
+    }));
+  };
+
   const toggleSuggestions = (index: number) => {
     setExpandedSuggestions(prev => ({
       ...prev,
       [index]: !prev[index]
     }));
+  };
+
+  // Función para encontrar y desplazarse al texto en el transcript
+  const scrollToTranscriptText = (searchText: string) => {
+    if (!selectedConversationId || !conversationHistory[selectedConversationId]) return;
+    
+    // Buscar el texto en el historial de conversación
+    const history = conversationHistory[selectedConversationId];
+    const matchingEntry = history.find(entry => 
+      entry.role === 'user' && entry.content.toLowerCase().includes(searchText.toLowerCase())
+    );
+    
+    if (matchingEntry) {
+      // Cambiar a la vista de conversaciones si no está activa
+      if (currentView !== 'conversations') {
+        setCurrentView('conversations');
+      }
+      
+      // Usar setTimeout para asegurar que el DOM se actualice antes de hacer scroll
+      setTimeout(() => {
+        // Buscar el elemento que contiene este texto específico
+        const messageElements = document.querySelectorAll('[data-message-content]');
+        for (const element of messageElements) {
+          if (element.textContent?.toLowerCase().includes(searchText.toLowerCase())) {
+            element.scrollIntoView({ 
+              behavior: 'smooth', 
+              block: 'center' 
+            });
+            // Resaltar temporalmente el elemento
+            element.classList.add('bg-yellow-200', 'transition-colors', 'duration-1000');
+            setTimeout(() => {
+              element.classList.remove('bg-yellow-200');
+            }, 2000);
+            break;
+          }
+        }
+      }, 100);
+    }
+  };
+
+  // Función para resaltar diferencias entre example y correction
+  const highlightGrammarDifferences = (example: string, correction: string) => {
+    // Dividir en palabras para comparar
+    const exampleWords = example.split(' ');
+    const correctionWords = correction.split(' ');
+    
+    return (
+      <div className="space-y-2">
+        <div>
+          <span className={`text-xs font-medium ${isDarkMode ? 'text-red-400' : 'text-red-600'}`}>
+            Your version:
+          </span>
+          <div className={`mt-1 p-2 rounded ${isDarkMode ? 'bg-red-900/20' : 'bg-red-50'}`}>
+            <span className={`${isDarkMode ? 'text-red-300' : 'text-red-700'}`}>
+              {example}
+            </span>
+          </div>
+        </div>
+        <div>
+          <span className={`text-xs font-medium ${isDarkMode ? 'text-green-400' : 'text-green-600'}`}>
+            Corrected version:
+          </span>
+          <div className={`mt-1 p-2 rounded ${isDarkMode ? 'bg-green-900/20' : 'bg-green-50'}`}>
+            <span className={`${isDarkMode ? 'text-green-300' : 'text-green-700'}`}>
+              {correction}
+            </span>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const getMessageColor = (message: Message) => {
@@ -1656,6 +1735,7 @@ export default function EnglishPractice() {
                                   ? 'bg-gray-700 text-white'
                                   : 'bg-white text-gray-800 border border-gray-200'
                             }`}
+                            data-message-content
                           >
                             <p className="whitespace-pre-wrap">{message.content}</p>
                           </div>
@@ -1706,11 +1786,371 @@ export default function EnglishPractice() {
                   </div>
 
                   {/* Contenido de recomendaciones */}
-                  <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
-                    <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                      {tutorRecommendations[activeRecommendationTab]}
-                    </p>
-                  </div>
+                  {activeRecommendationTab === 'vocabulary' && evaluationData?.vocabulary ? (
+                    <div className="space-y-4">
+                      {/* Score del vocabulario */}
+                      <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <h4 className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                            Vocabulary
+                          </h4>
+                          <span className={`px-2 py-1 rounded text-sm font-medium ${
+                            evaluationData.vocabulary.score >= 80 
+                              ? 'bg-green-100 text-green-800' 
+                              : evaluationData.vocabulary.score >= 60 
+                                ? 'bg-yellow-100 text-yellow-800' 
+                                : 'bg-red-100 text-red-800'
+                          }`}>
+                            {evaluationData.vocabulary.score}%
+                          </span>
+                        </div>
+                        <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                          Replace words you used in the call with stronger ones to sound like native.
+                        </p>
+                      </div>
+
+                      {/* YOU SAID - Palabras repetidas */}
+                      {evaluationData.vocabulary.repeatedWords && evaluationData.vocabulary.repeatedWords.length > 0 && (
+                        <div>
+                          <div className="flex items-center justify-between mb-3">
+                            <h5 className={`text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                              LEVEL
+                            </h5>
+                            <h5 className={`text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                              YOU SAID
+                            </h5>
+                            <h5 className={`text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                              WE SUGGEST
+                            </h5>
+                          </div>
+                          
+                          <div className="space-y-3">
+                            {evaluationData.vocabulary.repeatedWords.map((word, index) => {
+                              // Buscar la sugerencia correspondiente en el array de suggestedWords
+                              // Las sugerencias vienen en formato "collaborate instead of work"
+                              const suggestionText = evaluationData.vocabulary.suggestedWords?.find(suggestion => 
+                                suggestion.toLowerCase().includes(`instead of ${word.toLowerCase()}`)
+                              );
+                              
+                              // Extraer solo la palabra sugerida (antes de "instead of")
+                              const suggestedWord = suggestionText 
+                                ? suggestionText.split(' instead of ')[0].trim()
+                                : 'No suggestion available';
+                              
+                              return (
+                                <div key={index} className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-100'} grid grid-cols-3 gap-4 items-center`}>
+                                  <span className={`px-2 py-1 rounded text-xs font-medium text-center ${isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800'}`}>
+                                    A1
+                                  </span>
+                                  <span className={`text-sm font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                                    {word}
+                                  </span>
+                                  <span className={`text-sm font-medium ${isDarkMode ? 'text-green-400' : 'text-green-600'}`}>
+                                    {suggestedWord}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Palabras raras usadas (si las hay) */}
+                      {evaluationData.vocabulary.rareWordsUsed && evaluationData.vocabulary.rareWordsUsed.length > 0 && (
+                        <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-green-900/20' : 'bg-green-50'}`}>
+                          <h5 className={`text-sm font-medium mb-2 ${isDarkMode ? 'text-green-300' : 'text-green-800'}`}>
+                            Advanced words you used:
+                          </h5>
+                          <div className="flex flex-wrap gap-2">
+                            {evaluationData.vocabulary.rareWordsUsed.map((word, index) => (
+                              <span key={index} className={`px-2 py-1 rounded text-xs ${isDarkMode ? 'bg-green-800 text-green-200' : 'bg-green-100 text-green-800'}`}>
+                                {word}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : activeRecommendationTab === 'grammar' && evaluationData?.grammar ? (
+                    <div className="space-y-4">
+                      {/* Score de gramática */}
+                      <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <h4 className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                            Grammar
+                          </h4>
+                          <span className={`px-2 py-1 rounded text-sm font-medium ${
+                            evaluationData.grammar.score >= 80 
+                              ? 'bg-green-100 text-green-800' 
+                              : evaluationData.grammar.score >= 60 
+                                ? 'bg-yellow-100 text-yellow-800' 
+                                : 'bg-red-100 text-red-800'
+                          }`}>
+                            {evaluationData.grammar.score}%
+                          </span>
+                        </div>
+                        <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                          Review your grammar mistakes.
+                        </p>
+                      </div>
+
+                      {/* Lista de errores de gramática */}
+                      {evaluationData.grammar.errors && evaluationData.grammar.errors.length > 0 && (
+                        <div className="space-y-3">
+                          {/* Agrupar errores por tipo */}
+                          {Object.entries(
+                            evaluationData.grammar.errors.reduce((acc, error, index) => {
+                              const type = error.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                              if (!acc[type]) {
+                                acc[type] = [];
+                              }
+                              acc[type].push({ ...error, originalIndex: index });
+                              return acc;
+                            }, {} as Record<string, Array<typeof evaluationData.grammar.errors[0] & { originalIndex: number }>>)
+                          ).map(([errorType, errors]) => (
+                            <div key={errorType}>
+                              <h5 className={`text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                                {errorType}
+                              </h5>
+                              <div className="space-y-2">
+                                {errors.map((error) => (
+                                  <div key={error.originalIndex} className={`border rounded-lg ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+                                    {/* Error clickeable */}
+                                    <button
+                                      onClick={() => {
+                                        toggleGrammarError(error.originalIndex);
+                                        // También desplazarse al transcript
+                                        scrollToTranscriptText(error.example);
+                                      }}
+                                      className={`w-full p-4 text-left transition-colors ${
+                                        isDarkMode 
+                                          ? 'hover:bg-gray-800 text-white' 
+                                          : 'hover:bg-gray-50 text-gray-900'
+                                      }`}
+                                    >
+                                      <div className="flex items-center justify-between">
+                                        <div className="flex-1">
+                                          <p className="text-sm font-medium mb-1">
+                                            {error.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                          </p>
+                                          <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                                            {error.example}
+                                          </p>
+                                        </div>
+                                        <svg
+                                          className={`w-5 h-5 transition-transform ${
+                                            expandedGrammarErrors[error.originalIndex] ? 'rotate-180' : ''
+                                          } ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}
+                                          fill="none"
+                                          stroke="currentColor"
+                                          viewBox="0 0 24 24"
+                                        >
+                                          <path
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            strokeWidth={2}
+                                            d="M19 9l-7 7-7-7"
+                                          />
+                                        </svg>
+                                      </div>
+                                    </button>
+
+                                    {/* Contenido expandido */}
+                                    {expandedGrammarErrors[error.originalIndex] && (
+                                      <div className={`border-t p-4 ${isDarkMode ? 'border-gray-700 bg-gray-800/50' : 'border-gray-200 bg-gray-50'}`}>
+                                        {/* Comparación example vs correction */}
+                                        {highlightGrammarDifferences(error.example, error.correction)}
+                                        
+                                        {/* Explicación */}
+                                        <div className="mt-4">
+                                          <h6 className={`text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                                            Explanation
+                                          </h6>
+                                          <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                                            {error.notes}
+                                          </p>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : activeRecommendationTab === 'grammar' ? (
+                    <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                      <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                        Complete a practice session to see grammar recommendations.
+                      </p>
+                    </div>
+                  ) : activeRecommendationTab === 'fluency' && evaluationData?.fluency ? (
+                    <div className="space-y-4">
+                      {/* Score de fluidez */}
+                      <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <h4 className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                            Fluency
+                          </h4>
+                          <span className={`px-2 py-1 rounded text-sm font-medium ${
+                            evaluationData.fluency.score >= 80 
+                              ? 'bg-green-100 text-green-800' 
+                              : evaluationData.fluency.score >= 60 
+                                ? 'bg-yellow-100 text-yellow-800' 
+                                : 'bg-red-100 text-red-800'
+                          }`}>
+                            {evaluationData.fluency.score}%
+                          </span>
+                        </div>
+                        <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                          Review your speech pace and parasitic words.
+                        </p>
+                      </div>
+
+                      {/* Parasitic Words */}
+                      {evaluationData.fluency.mostUsedWords && evaluationData.fluency.mostUsedWords.length > 0 && (
+                        <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                          <div className="flex items-center gap-2 mb-3">
+                            <h5 className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                              Parasitic Words
+                            </h5>
+                          </div>
+                          
+                          <div className="flex items-center gap-2 mb-3">
+                            <span className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                              {evaluationData.fluency.fillerWordsRatio ? Math.round(evaluationData.fluency.fillerWordsRatio * 100) : 0}%
+                            </span>
+                            <span className="text-2xl">👍</span>
+                          </div>
+
+                          <p className={`text-sm mb-3 ${
+                            (evaluationData.fluency.fillerWordsRatio || 0) < 0.1 
+                              ? isDarkMode ? 'text-green-400' : 'text-green-600'
+                              : isDarkMode ? 'text-yellow-400' : 'text-yellow-600'
+                          }`}>
+                            <span className="font-medium">
+                              {(evaluationData.fluency.fillerWordsRatio || 0) < 0.1 ? 'Great results!' : 'Good progress!'} 
+                            </span>
+                            {' '}Your filler words usage is {(evaluationData.fluency.fillerWordsRatio || 0) < 0.1 ? 'low' : 'moderate'}.
+                          </p>
+
+                          <p className={`text-sm mb-3 ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                            Your most frequently used words are:
+                          </p>
+
+                          <div className="flex flex-wrap gap-3">
+                            {evaluationData.fluency.mostUsedWords.map((wordData, index) => (
+                              <div key={index} className="flex items-center gap-2">
+                                <span className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                                  {wordData.word}
+                                </span>
+                                <span className={`px-2 py-1 rounded text-sm ${isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'}`}>
+                                  {wordData.count}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Words per Minute */}
+                      <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                        <div className="flex items-center gap-2 mb-3">
+                          <h5 className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                            Words per Minute
+                          </h5>
+                        </div>
+
+                        <div className="flex items-center gap-2 mb-3">
+                          <span className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                            {Math.round(evaluationData.fluency.wordsPerMinute || 0)} words
+                          </span>
+                          <span className="text-2xl">🤖</span>
+                        </div>
+
+                        {evaluationData.fluency.nativeRange && (
+                          <>
+                            <p className={`text-sm mb-3 ${
+                              (evaluationData.fluency.wordsPerMinute || 0) >= evaluationData.fluency.nativeRange.min &&
+                              (evaluationData.fluency.wordsPerMinute || 0) <= evaluationData.fluency.nativeRange.max
+                                ? isDarkMode ? 'text-green-400' : 'text-green-600'
+                                : (evaluationData.fluency.wordsPerMinute || 0) < evaluationData.fluency.nativeRange.min
+                                  ? isDarkMode ? 'text-yellow-400' : 'text-yellow-600'
+                                  : isDarkMode ? 'text-blue-400' : 'text-blue-600'
+                            }`}>
+                              <span className="font-medium">
+                                {(evaluationData.fluency.wordsPerMinute || 0) >= evaluationData.fluency.nativeRange.min &&
+                                 (evaluationData.fluency.wordsPerMinute || 0) <= evaluationData.fluency.nativeRange.max
+                                  ? 'Perfect pace!'
+                                  : (evaluationData.fluency.wordsPerMinute || 0) < evaluationData.fluency.nativeRange.min
+                                    ? 'Speed up'
+                                    : 'Slow down'
+                                }
+                              </span>
+                              {' '}
+                              {(evaluationData.fluency.wordsPerMinute || 0) < evaluationData.fluency.nativeRange.min
+                                ? 'a bit and add confidence to make your speech more engaging.'
+                                : (evaluationData.fluency.wordsPerMinute || 0) > evaluationData.fluency.nativeRange.max
+                                  ? 'a bit to make your speech clearer and easier to follow.'
+                                  : 'Your speaking speed is in the native range.'
+                              }
+                            </p>
+
+                            <div className="mb-2">
+                              <span className={`text-sm font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                                You
+                              </span>
+                            </div>
+
+                            {/* Barra de progreso */}
+                            <div className="relative">
+                              <div className={`h-2 rounded-full ${isDarkMode ? 'bg-gray-700' : 'bg-gray-200'}`}>
+                                {/* Rango nativo (verde) */}
+                                <div 
+                                  className="absolute h-2 bg-green-500 rounded-full"
+                                  style={{
+                                    left: `${(evaluationData.fluency.nativeRange.min / 200) * 100}%`,
+                                    width: `${((evaluationData.fluency.nativeRange.max - evaluationData.fluency.nativeRange.min) / 200) * 100}%`
+                                  }}
+                                />
+                                {/* Posición del usuario */}
+                                <div 
+                                  className="absolute w-4 h-4 bg-white border-2 border-orange-500 rounded-full -top-1"
+                                  style={{
+                                    left: `${Math.min(Math.max((evaluationData.fluency.wordsPerMinute || 0) / 200 * 100, 0), 100)}%`,
+                                    transform: 'translateX(-50%)'
+                                  }}
+                                />
+                              </div>
+                              
+                              {/* Labels */}
+                              <div className="flex justify-between mt-2 text-xs">
+                                <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>slow</span>
+                                <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>{evaluationData.fluency.nativeRange.min}</span>
+                                <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>just right</span>
+                                <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>{evaluationData.fluency.nativeRange.max}</span>
+                                <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>fast</span>
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ) : activeRecommendationTab === 'fluency' ? (
+                    <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                      <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                        Complete a practice session to see fluency recommendations.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                      <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                        {tutorRecommendations[activeRecommendationTab]}
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
