@@ -67,9 +67,39 @@ export interface SessionCompletionResponse {
 }
 
 export const languageService = {
+  startSession: async (
+    userId: string,
+    payload: { language: string; mode: string; context?: string }
+  ): Promise<{ sessionId?: string, _id?: string }> => {
+    try {
+      const response = await fetchWithAuth(
+        `/language/users/${encodeURIComponent(userId)}/practice-sessions`,
+        {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        }
+      );
+      return response;
+    } catch (error) {
+      console.error('Error starting language session:', error);
+      throw error;
+    }
+  },
+  getLiveKitToken: async (sessionId: string): Promise<{ token: string }> => {
+    try {
+      const response = await fetchWithAuth('/livekit/token', {
+        method: 'POST',
+        body: JSON.stringify({ sessionId })
+      });
+      return response;
+    } catch (error) {
+      console.error('Error getting LiveKit token:', error);
+      throw error;
+    }
+  },
   completeSession: async (
-    userId: string, 
-    sessionId: string, 
+    userId: string,
+    sessionId: string,
     payload: SessionCompletionPayload
   ): Promise<SessionCompletionResponse> => {
     try {

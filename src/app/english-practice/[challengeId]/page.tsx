@@ -10,8 +10,18 @@ import Image from 'next/image';
 import EnglishProgressChart from '@/components/EnglishProgressChart';
 import { MicrophoneIcon, ChartBarIcon, ClockIcon } from '@heroicons/react/24/outline';
 import { ChevronDownIcon } from '@heroicons/react/24/solid';
-import io, { Socket } from 'socket.io-client';
 import { languageService, SessionCompletionResponse } from '@/services/languageService';
+import {
+  LiveKitRoom,
+  VoiceAssistantControlBar,
+  DisconnectButton,
+  useVoiceAssistant,
+  BarVisualizer,
+  RoomAudioRenderer,
+  useTranscriptions,
+} from '@livekit/components-react';
+import { Track } from 'livekit-client';
+import '@livekit/components-styles';
 
 
 interface Message {
@@ -59,6 +69,7 @@ export default function EnglishPractice() {
   const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null);
   const [activeRecommendationTab, setActiveRecommendationTab] = useState<'pronunciation' | 'vocabulary' | 'grammar' | 'fluency'>('pronunciation');
   const [expandedGrammarErrors, setExpandedGrammarErrors] = useState<{ [key: number]: boolean }>({});
+  const [expandedPronunciationWords, setExpandedPronunciationWords] = useState<{ [key: number]: boolean }>({});
   const [showPlacementTest, setShowPlacementTest] = useState(false);
   const [showPracticeView, setShowPracticeView] = useState(false);
   const [practiceType, setPracticeType] = useState<PracticeType | null>(null);
@@ -71,7 +82,7 @@ export default function EnglishPractice() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [evaluationData, setEvaluationData] = useState<{
     level: string;
-    pronunciation: { 
+    pronunciation: {
       score: number;
       mispronouncedWords?: Array<{
         word: string;
@@ -81,7 +92,7 @@ export default function EnglishPractice() {
         notes: string;
       }>;
     };
-    grammar: { 
+    grammar: {
       score: number;
       errors?: Array<{
         type: string;
@@ -90,13 +101,13 @@ export default function EnglishPractice() {
         notes: string;
       }>;
     };
-    vocabulary: { 
+    vocabulary: {
       score: number;
       rareWordsUsed?: string[];
       repeatedWords?: string[];
       suggestedWords?: string[];
     };
-    fluency: { 
+    fluency: {
       score: number;
       wordsPerMinute?: number;
       nativeRange?: {
@@ -115,17 +126,8 @@ export default function EnglishPractice() {
   const sessionIdRef = useRef<string | null>(null); // Ref para acceso inmediato al sessionId
   const isRecordingRef = useRef<boolean>(false); // Ref para acceso inmediato al estado de grabación
   const subtitleAnimationRef = useRef<NodeJS.Timeout | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
-  const socketRef = useRef<Socket | null>(null);
-  const audioPlaybackContextRef = useRef<AudioContext | null>(null);
+  const [liveKitToken, setLiveKitToken] = useState<string | null>(null);
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const audioQueueRef = useRef<Array<{ buffer: AudioBuffer; timestamp: number }>>([]);
-  const isPlayingAudioRef = useRef<boolean>(false);
-  const currentAudioSourceRef = useRef<AudioBufferSourceNode | null>(null);
-  const nextPlayTimeRef = useRef<number>(0);
-  const isUserSpeakingRef = useRef<boolean>(false);
   const conversationStartTimeRef = useRef<number>(0);
   const transcriptRef = useRef<TranscriptEntry[]>([]);
   const audioUrlsRef = useRef<AudioUrlEntry[]>([]);
@@ -205,21 +207,6 @@ export default function EnglishPractice() {
       if (subtitleAnimationRef.current) {
         clearInterval(subtitleAnimationRef.current);
       }
-      if (audioWorkletNodeRef.current) {
-        audioWorkletNodeRef.current.disconnect();
-      }
-      if (audioContextRef.current) {
-        audioContextRef.current.close().catch(console.error);
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-      }
-      if (audioPlaybackContextRef.current) {
-        audioPlaybackContextRef.current.close().catch(console.error);
-      }
     };
   }, []);
 
@@ -233,7 +220,7 @@ export default function EnglishPractice() {
   const sendConversationToBackend = useCallback(async () => {
     const currentSessionId = sessionIdRef.current;
     const userId = session?.user?.id;
-    
+
     if (!currentSessionId || !userId) {
       console.warn('No se puede enviar conversación: falta sessionId o userId');
       return;
@@ -244,7 +231,7 @@ export default function EnglishPractice() {
 
     const payload = {
       language: 'english',
-      level: '', 
+      level: '',
       endedAt: new Date(endTime).toISOString(),
       durationSeconds,
       feedback: {}, // Será sobrescrito por análisis CEFR en el backend
@@ -252,7 +239,7 @@ export default function EnglishPractice() {
 
     try {
       const result: SessionCompletionResponse = await languageService.completeSession(userId, currentSessionId, payload);
-      
+
       console.log('========== RESPUESTA DEL BACKEND ==========');
       console.log('Response:', JSON.stringify(result, null, 2));
       console.log('✅ Sesión completada exitosamente');
@@ -261,21 +248,21 @@ export default function EnglishPractice() {
       if (result.level && result.pronunciation?.score !== undefined && result.grammar?.score !== undefined && result.vocabulary?.score !== undefined && result.fluency?.score !== undefined) {
         setEvaluationData({
           level: result.level,
-          pronunciation: { 
+          pronunciation: {
             score: result.pronunciation.score,
             mispronouncedWords: result.pronunciation.mispronouncedWords || []
           },
-          grammar: { 
+          grammar: {
             score: result.grammar.score,
             errors: result.grammar.errors || []
           },
-          vocabulary: { 
+          vocabulary: {
             score: result.vocabulary.score,
             rareWordsUsed: result.vocabulary.rareWordsUsed || [],
             repeatedWords: result.vocabulary.repeatedWords || [],
             suggestedWords: result.vocabulary.suggestedWords || []
           },
-          fluency: { 
+          fluency: {
             score: result.fluency.score,
             wordsPerMinute: result.fluency.wordsPerMinute,
             nativeRange: result.fluency.nativeRange,
@@ -291,7 +278,7 @@ export default function EnglishPractice() {
       if (result.conversationLog?.transcript && Array.isArray(result.conversationLog.transcript)) {
         // Generar un nuevo ID para la conversación
         const newConversationId = Math.max(...conversations.map(c => c.id), 0) + 1;
-        
+
         // Determinar el título basado en el tipo de práctica
         let title = 'English Practice';
         if (practiceType === 'placement') {
@@ -352,88 +339,22 @@ export default function EnglishPractice() {
       console.error('========== ERROR AL ENVIAR CONVERSACIÓN ==========');
       console.error(error);
     }
-  
+
   }, [session]);
 
   const handleStopRecording = useCallback(async () => {
-    // DETENER TODO EL AUDIO INMEDIATAMENTE
-    // 1. Detener cualquier audio que se esté reproduciendo
-    if (currentAudioSourceRef.current) {
-      try {
-        currentAudioSourceRef.current.stop();
-        currentAudioSourceRef.current.disconnect();
-      } catch {
-        // Ignorar errores
-      }
-      currentAudioSourceRef.current = null;
-    }
-
-    // 2. Limpiar completamente la cola de audio para evitar reproducciones futuras
-    audioQueueRef.current = [];
-    isPlayingAudioRef.current = false;
-    nextPlayTimeRef.current = 0;
-    isUserSpeakingRef.current = false;
-
-    // 3. Cerrar inmediatamente el AudioContext de reproducción para detener todo audio
-    if (audioPlaybackContextRef.current) {
-      try {
-        // Suspender primero para detener cualquier reproducción activa
-        await audioPlaybackContextRef.current.suspend();
-        await audioPlaybackContextRef.current.close();
-      } catch (error) {
-        console.warn('Error al cerrar AudioContext de reproducción:', error);
-      }
-      audioPlaybackContextRef.current = null;
-    }
-
-    // 4. Desconectar Socket.IO INMEDIATAMENTE para evitar más audio entrante
-    if (socketRef.current) {
-      socketRef.current.disconnect();
-      socketRef.current = null;
-    }
-
-    // 5. Desconectar AudioWorkletNode
-    if (audioWorkletNodeRef.current) {
-      audioWorkletNodeRef.current.disconnect();
-      audioWorkletNodeRef.current = null;
-    }
-
-    // 6. Cerrar AudioContext de grabación
-    if (audioContextRef.current) {
-      try {
-        await audioContextRef.current.suspend();
-        await audioContextRef.current.close();
-      } catch (error) {
-        console.warn('Error al cerrar AudioContext de grabación:', error);
-      }
-      audioContextRef.current = null;
-    }
-
-    // 7. Detener el stream del micrófono
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
-    }
-
-    // 8. Limpiar refs de conversación
-    transcriptRef.current = [];
-    audioUrlsRef.current = [];
-    conversationStartTimeRef.current = 0;
-
-    // 9. Actualizar estados de UI y refs
     setIsRecording(false);
-    isRecordingRef.current = false; // Actualizar ref inmediatamente
+    isRecordingRef.current = false;
     setIsTestMode(false);
-    setTimeRemaining(240); // Resetear a valor por defecto
+    setTimeRemaining(240);
     setFullSubtitles('');
     setDisplayedSubtitles('');
     setShowSubtitles(true);
+    setLiveKitToken(null);
 
-    // 10. Enviar conversación al backend AL FINAL (después de detener todo)
     await sendConversationToBackend();
     updateSessionId(null);
-    
-    // Cerrar la vista del placement test o práctica y volver a practice
+
     setShowPlacementTest(false);
     setShowPracticeView(false);
     setPracticeType(null);
@@ -443,22 +364,19 @@ export default function EnglishPractice() {
   // Manejar el cronómetro
   useEffect(() => {
     if (isRecording) {
-      // Limpiar intervalo anterior si existe
       if (timerIntervalRef.current) {
         clearInterval(timerIntervalRef.current);
       }
-      
+
       timerIntervalRef.current = setInterval(() => {
         setTimeRemaining((prev) => {
           if (isTestMode) {
-            // Modo test: cuenta hacia atrás desde 240 (4 minutos)
             if (prev <= 1) {
               handleStopRecording();
               return 0;
             }
             return prev - 1;
           } else {
-            // Modo practice: cuenta hacia adelante desde 0 (sin límite)
             return prev + 1;
           }
         });
@@ -483,592 +401,84 @@ export default function EnglishPractice() {
     const secs = seconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
-
-  // Función para convertir PCM16 base64 a AudioBuffer
-  const decodePCM16ToAudioBuffer = (base64Audio: string, sampleRate: number = 24000): AudioBuffer | null => {
-    try {
-      // Decodificar base64 a Uint8Array
-      const binaryString = atob(base64Audio);
-      let audioBytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        audioBytes[i] = binaryString.charCodeAt(i);
-      }
-
-      // Asegurar que el buffer tenga un número par de bytes (PCM16 = 2 bytes por sample)
-      const byteLength = audioBytes.length;
-      if (byteLength % 2 !== 0) {
-        console.warn('Audio buffer tiene longitud impar, truncando último byte');
-        audioBytes = audioBytes.slice(0, byteLength - 1);
-      }
-
-      // Crear Int16Array con alineación correcta (2 bytes por sample)
-      const sampleCount = audioBytes.length / 2;
-      const int16Array = new Int16Array(audioBytes.buffer, audioBytes.byteOffset, sampleCount);
-      
-      // Convertir a Float32Array normalizado (-1.0 a 1.0)
-      const float32Array = new Float32Array(sampleCount);
-      for (let i = 0; i < int16Array.length; i++) {
-        // Normalizar de Int16 (-32768 a 32767) a Float32 (-1.0 a 1.0)
-        float32Array[i] = Math.max(-1, Math.min(1, int16Array[i] / 32768.0));
-      }
-
-      // Crear AudioBuffer
-      if (!audioPlaybackContextRef.current) {
-        audioPlaybackContextRef.current = new AudioContext({ sampleRate });
-      }
-
-      const audioContext = audioPlaybackContextRef.current;
-      const audioBuffer = audioContext.createBuffer(1, sampleCount, sampleRate);
-      audioBuffer.getChannelData(0).set(float32Array);
-
-      return audioBuffer;
-    } catch (error) {
-      console.error('Error al decodificar PCM16:', error);
-      return null;
-    }
-  };
-
-  // Función para reproducir audio de la cola secuencialmente
-  const playNextAudioChunk = () => {
-    // VERIFICAR SI LA GRABACIÓN SIGUE ACTIVA - Si no, detener reproducción
-    if (!isRecordingRef.current) {
-      console.log('Deteniendo reproducción - grabación terminada');
-      isPlayingAudioRef.current = false;
-      return;
-    }
-
-    if (isUserSpeakingRef.current) {
-      // Si el usuario está hablando, pausar la reproducción
-      if (currentAudioSourceRef.current) {
-        try {
-          currentAudioSourceRef.current.stop();
-        } catch {
-          // Ignorar errores si ya se detuvo
-        }
-        currentAudioSourceRef.current = null;
-      }
-      isPlayingAudioRef.current = false;
-      return;
-    }
-
-    if (audioQueueRef.current.length === 0) {
-      isPlayingAudioRef.current = false;
-      return;
-    }
-
-    if (isPlayingAudioRef.current) {
-      return; // Ya hay un chunk reproduciéndose
-    }
-
-    const chunk = audioQueueRef.current.shift();
-    if (!chunk || !audioPlaybackContextRef.current) {
-      isPlayingAudioRef.current = false;
-      return;
-    }
-
-    try {
-      const audioContext = audioPlaybackContextRef.current;
-      const source = audioContext.createBufferSource();
-      source.buffer = chunk.buffer;
-      source.connect(audioContext.destination);
-
-      // Calcular el tiempo de inicio para evitar gaps
-      const currentTime = audioContext.currentTime;
-      const startTime = Math.max(currentTime, nextPlayTimeRef.current);
-      
-      source.start(startTime);
-      
-      // Calcular cuándo terminará este chunk
-      const duration = chunk.buffer.duration;
-      nextPlayTimeRef.current = startTime + duration;
-
-      currentAudioSourceRef.current = source;
-      isPlayingAudioRef.current = true;
-
-      // Cuando termine este chunk, reproducir el siguiente SOLO si sigue grabando
-      source.onended = () => {
-        currentAudioSourceRef.current = null;
-        isPlayingAudioRef.current = false;
-        // Verificar estado antes de continuar
-        if (isRecordingRef.current) {
-          setTimeout(() => playNextAudioChunk(), 0);
-        }
-      };
-
-
-    } catch (error) {
-      console.error('Error al reproducir chunk:', error);
-      isPlayingAudioRef.current = false;
-      // Intentar reproducir el siguiente chunk SOLO si sigue grabando
-      if (isRecordingRef.current) {
-        setTimeout(() => playNextAudioChunk(), 0);
-      }
-    }
-  };
-
-  // Función para agregar audio a la cola
-  const enqueueAudio = (audioBuffer: AudioBuffer, timestamp: number) => {
-    audioQueueRef.current.push({ buffer: audioBuffer, timestamp });
-    
-    // Si no hay nada reproduciéndose, empezar a reproducir
-    if (!isPlayingAudioRef.current) {
-      playNextAudioChunk();
-    }
-  };
-
-  // Detectar si el usuario está hablando (VAD básico)
-  const detectUserSpeech = (audioData: Float32Array): boolean => {
-    // Calcular el nivel de energía del audio
-    let sum = 0;
-    for (let i = 0; i < audioData.length; i++) {
-      sum += Math.abs(audioData[i]);
-    }
-    const averageLevel = sum / audioData.length;
-    
-    // Threshold para detectar voz (ajustable)
-    const threshold = 0.01; // Ajustar según sea necesario
-    
-    return averageLevel > threshold;
-  };
-
-  // Función para inicializar Socket.IO
-  const initializeSocket = (token: string | undefined) => {
-    try {
-      if (!token) {
-        console.error('No se proporcionó token para la conexión Socket.IO');
-        return null;
-      }
-
-      const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:5000/realtime-practice';
-      // Usar auth object (recomendado por Socket.IO) para enviar el token
-      const socket = io(socketUrl, {
-        auth: {
-          token: token
-        }
-      });
-
-      socket.on('connect', () => {
-        console.log('Socket.IO conectado');
-      });
-
-      socket.on('disconnect', () => {
-        console.log('Socket.IO desconectado');
-      });
-
-      socket.on('connect_error', (error) => {
-        console.error('Error de conexión Socket.IO:', error);
-      });
-
-      // Escuchar cuando la sesión esté lista
-      socket.on('practice-started', (data) => {
-        console.log('Sesión iniciada:', data);
-        if (data.sessionId) {
-          updateSessionId(data.sessionId);
-        } else {
-          console.warn('No se recibió sessionId del backend');
-        }
-      });
-
-      // Recibir audio del asistente
-      socket.on('assistant-audio-chunk', async (data: { 
-        sessionId: string; 
-        audio: string; // Base64 PCM16
-        timestamp: number;
-      }) => {
-        try {
-          // VERIFICAR SI LA GRABACIÓN SIGUE ACTIVA - Si no, ignorar el audio
-          if (!isRecordingRef.current || !audioPlaybackContextRef.current) {
-            console.log('Ignorando audio chunk - grabación terminada');
-            return;
-          }
-
-          // Decodificar PCM16 a AudioBuffer
-          const audioBuffer = decodePCM16ToAudioBuffer(data.audio, 24000);
-          
-          if (!audioBuffer) {
-            console.error('No se pudo decodificar el audio');
-            return;
-          }
-
-          // Verificar nuevamente antes de encolar (doble verificación)
-          if (!isRecordingRef.current) {
-            console.log('Ignorando enqueue - grabación terminada');
-            return;
-          }
-
-          // Agregar a la cola de reproducción
-          enqueueAudio(audioBuffer, data.timestamp);
-
-          // Acumular URL de audio del asistente (base64)
-          const audioUrl = `data:audio/pcm;base64,${data.audio}`;
-          audioUrlsRef.current.push({
-            role: 'assistant',
-            url: audioUrl
-          });
-
-
-        } catch (error) {
-          console.error('Error al procesar audio del asistente:', error);
-        }
-      });
-
-      // Recibir transcripción del asistente (delta - texto incremental)
-      socket.on('assistant-transcript-delta', (data: { text: string }) => {
-        if (data.text && showSubtitles) {
-          // Acumular el texto completo gradualmente
-          setFullSubtitles(prev => prev + data.text);
-        }
-      });
-
-      // Recibir transcripción completa del asistente
-      socket.on('assistant-transcript-complete', (data: { text: string; timestamp: number }) => {
-        
-        // Acumular en el transcript
-        const relativeTimestamp = conversationStartTimeRef.current > 0 
-          ? data.timestamp - conversationStartTimeRef.current 
-          : data.timestamp;
-        
-        transcriptRef.current.push({
-          role: 'assistant',
-          text: data.text,
-          timestamp: relativeTimestamp
-        });
-      });
-
-      // Recibir transcripción del usuario
-      socket.on('user-transcript', (data: { text: string; timestamp: number }) => {
-        
-        // Acumular en el transcript
-        const relativeTimestamp = conversationStartTimeRef.current > 0 
-          ? data.timestamp - conversationStartTimeRef.current 
-          : data.timestamp;
-        
-        transcriptRef.current.push({
-          role: 'user',
-          text: data.text,
-          timestamp: relativeTimestamp
-        });
-      });
-
-      socketRef.current = socket;
-      return socket;
-    } catch (error) {
-      console.error('Error al inicializar Socket.IO:', error);
-      return null;
-    }
-  };
-
-  // Función para convertir Float32Array a PCM16 (Int16Array) y luego a base64
-  const float32ArrayToPCM16Base64 = (float32Array: Float32Array): string => {
-    // Convertir Float32Array (-1.0 a 1.0) a Int16Array (-32768 a 32767)
-    const int16Array = new Int16Array(float32Array.length);
-    for (let i = 0; i < float32Array.length; i++) {
-      // Clampear el valor entre -1.0 y 1.0, luego escalar a Int16
-      const sample = Math.max(-1, Math.min(1, float32Array[i]));
-      int16Array[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-    }
-    
-    // Convertir Int16Array a Uint8Array (little-endian)
-    const uint8Array = new Uint8Array(int16Array.buffer);
-    
-    // Convertir a base64
-    let binary = '';
-    for (let i = 0; i < uint8Array.length; i++) {
-      binary += String.fromCharCode(uint8Array[i]);
-    }
-    return btoa(binary);
-  };
-
-  // Función para enviar audio a través del Socket.IO
-  const sendAudioToSocket = (audioData: Float32Array) => {
-    // Usar el ref para acceso inmediato al sessionId (sin depender del estado de React)
-    const currentSessionId = sessionIdRef.current;
-    
-    if (socketRef.current && socketRef.current.connected && currentSessionId) {
-      try {
-        // Convertir Float32Array a PCM16 base64
-        const base64Audio = float32ArrayToPCM16Base64(audioData);
-        
-        // Enviar audio chunk
-        socketRef.current.emit('audio-chunk', {
-          sessionId: currentSessionId,
-          audio: base64Audio
-        });
-        
-      } catch (error) {
-        console.error('Error al enviar audio:', error);
-      }
-    } else {
-      // Logs de debugging para identificar qué condición falla
-      if (!socketRef.current) {
-        console.warn('Socket no inicializado');
-      } else if (!socketRef.current.connected) {
-        console.warn('Socket no conectado');
-      } else if (!currentSessionId) {
-        console.warn('SessionId no disponible. sessionIdRef.current:', currentSessionId);
-      }
-    }
-  };
-
   const handleStartPractice = async () => {
     try {
-      // Obtener el token de la sesión
-      const token = session?.user?.token;
-      if (!token) {
-        alert('No se encontró el token de autenticación. Por favor, inicia sesión nuevamente.');
-        return;
-      }
-
-      // Inicializar Socket.IO con el token
-      const socket = initializeSocket(token);
-      if (!socket) {
-        alert('No se pudo conectar al servidor. Por favor, intenta de nuevo.');
-        return;
-      }
-
-      // Obtener userId de la sesión
       const userId = session?.user?.id;
-      const currentSessionId = `practice-${practiceType}-${Date.now()}`;
-      updateSessionId(currentSessionId);
+      if (!userId) {
+        alert('User not found. Please log in again.');
+        return;
+      }
 
-      // Inicializar timestamp de inicio de conversación
-      conversationStartTimeRef.current = Date.now();
-
-      // Determinar el contexto según el tipo de práctica
       let context = '';
       switch (practiceType) {
-        case 'interview':
-          context = 'software development job interview';
-          break;
-        case 'grammar':
-          context = 'grammar practice';
-          break;
-        case 'vocabulary':
-          context = 'vocabulary building';
-          break;
-        case 'pronunciation':
-          context = 'pronunciation tips';
-          break;
-        case 'business':
-          context = 'business English';
-          break;
-        default:
-          context = 'general English practice';
+        case 'interview': context = 'software development job interview'; break;
+        case 'grammar': context = 'grammar practice'; break;
+        case 'vocabulary': context = 'vocabulary building'; break;
+        case 'pronunciation': context = 'pronunciation tips'; break;
+        case 'business': context = 'business English'; break;
+        default: context = 'general English practice';
       }
 
-      // Iniciar práctica en modo practice
-      socket.emit('start-practice', {
-        userId,
-        sessionId: currentSessionId,
+      const response = await languageService.startSession(userId, {
         language: 'english',
-        mode: 'practice', // Modo practice para práctica regular
+        mode: 'practice',
         context: context
-      });
+      }) as any;
 
-      // Obtener acceso al micrófono
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          channelCount: 1,
-          sampleRate: 16000,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        } 
-      });
-      streamRef.current = stream;
+      const newSessionId = response.sessionId || response._id;
+      setSessionId(newSessionId);
 
-      // Crear AudioContext
-      const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      const audioContext = new AudioContextClass({
-        sampleRate: 16000
-      });
-      audioContextRef.current = audioContext;
+      const { token: lkToken } = await languageService.getLiveKitToken(newSessionId);
+      setLiveKitToken(lkToken);
 
-      // Crear AudioContext para reproducción
-      audioPlaybackContextRef.current = new AudioContext();
-
-      // Cargar y conectar AudioWorklet
-      try {
-        await audioContext.audioWorklet.addModule('/audio-processor.js');
-      } catch (error) {
-        console.error('Error al cargar AudioWorklet:', error);
-        alert('Error al inicializar el procesador de audio. Por favor, recarga la página.');
-        return;
-      }
-
-      // Crear fuente de audio desde el stream
-      const source = audioContext.createMediaStreamSource(stream);
-
-      // Crear AudioWorkletNode
-      const audioWorkletNode = new AudioWorkletNode(audioContext, 'audio-processor');
-      audioWorkletNodeRef.current = audioWorkletNode;
-
-      // Escuchar mensajes del AudioWorkletProcessor
-      audioWorkletNode.port.onmessage = (event) => {
-        if (event.data.type === 'audioData') {
-          const audioData = new Float32Array(event.data.data);
-          
-          // Detectar si el usuario está hablando (VAD)
-          const userIsSpeaking = detectUserSpeech(audioData);
-          isUserSpeakingRef.current = userIsSpeaking;
-
-          // Si el usuario está hablando, pausar el audio del bot
-          if (userIsSpeaking && currentAudioSourceRef.current) {
-            try {
-              currentAudioSourceRef.current.stop();
-              currentAudioSourceRef.current = null;
-              isPlayingAudioRef.current = false;
-            } catch {
-              // Ignorar errores
-            }
-          }
-
-          // Si el usuario dejó de hablar, reanudar reproducción
-          if (!userIsSpeaking && !isPlayingAudioRef.current && audioQueueRef.current.length > 0) {
-            playNextAudioChunk();
-          }
-
-          // Enviar audio al Socket.IO continuamente (el backend necesita el stream completo)
-          sendAudioToSocket(audioData);
-        }
-      };
-
-      // Conectar el flujo de audio
-      source.connect(audioWorkletNode);
-      audioWorkletNode.connect(audioContext.destination);
+      conversationStartTimeRef.current = Date.now();
 
       setFullSubtitles('Hi! 👋 I\'m Maria. Let\'s practice together!');
       setDisplayedSubtitles('');
-      setIsTestMode(false); // Modo practice: cuenta hacia adelante
-      setTimeRemaining(0); // Iniciar en 00:00 para modo practice
+      setIsTestMode(false);
+      setTimeRemaining(0);
       setIsRecording(true);
-      isRecordingRef.current = true; // Actualizar ref inmediatamente
     } catch (error) {
-      console.error('Error al acceder al micrófono:', error);
-      alert('No se pudo acceder al micrófono. Por favor, verifica los permisos.');
+      console.error('Error starting practice:', error);
+      alert('Could not start practice session. Please try again.');
     }
   };
 
   const handleStartRecording = async () => {
     try {
-      // Obtener el token de la sesión
-      const token = session?.user?.token;
-      if (!token) {
-        alert('No se encontró el token de autenticación. Por favor, inicia sesión nuevamente.');
-        return;
-      }
-
-      // Inicializar Socket.IO con el token
-      const socket = initializeSocket(token);
-      if (!socket) {
-        alert('No se pudo conectar al servidor. Por favor, intenta de nuevo.');
-        return;
-      }
-
-      // Obtener userId de la sesión
       const userId = session?.user?.id;
-      const currentSessionId = `cefr-test-${Date.now()}`;
-      updateSessionId(currentSessionId);
-
-      // Inicializar timestamp de inicio de conversación
-      conversationStartTimeRef.current = Date.now();
-
-      // Iniciar práctica en modo test
-      socket.emit('start-practice', {
-        userId,
-        sessionId: currentSessionId,
-        language: 'english',
-        mode: 'test' // Modo test para placement test
-      });
-
-      // Obtener acceso al micrófono
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          channelCount: 1,
-          sampleRate: 16000, // OpenAI Realtime recomienda 16kHz
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        } 
-      });
-      streamRef.current = stream;
-
-      // Crear AudioContext
-      const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      const audioContext = new AudioContextClass({
-        sampleRate: 16000
-      });
-      audioContextRef.current = audioContext;
-
-      // Crear AudioContext para reproducción
-      audioPlaybackContextRef.current = new AudioContext();
-
-      // Cargar y conectar AudioWorklet
-      try {
-        await audioContext.audioWorklet.addModule('/audio-processor.js');
-      } catch (error) {
-        console.error('Error al cargar AudioWorklet:', error);
-        alert('Error al inicializar el procesador de audio. Por favor, recarga la página.');
+      if (!userId) {
+        alert('User not found. Please log in again.');
         return;
       }
 
-      // Crear fuente de audio desde el stream
-      const source = audioContext.createMediaStreamSource(stream);
+      const response = await languageService.startSession(userId, {
+        language: 'english',
+        mode: 'test'
+      }) as any;
 
-      // Crear AudioWorkletNode
-      const audioWorkletNode = new AudioWorkletNode(audioContext, 'audio-processor');
-      audioWorkletNodeRef.current = audioWorkletNode;
+      const newSessionId = response.sessionId || response._id;
+      setSessionId(newSessionId);
 
-      // Escuchar mensajes del AudioWorkletProcessor
-      audioWorkletNode.port.onmessage = (event) => {
-        if (event.data.type === 'audioData') {
-          const audioData = new Float32Array(event.data.data);
-          
-          // Detectar si el usuario está hablando (VAD)
-          const userIsSpeaking = detectUserSpeech(audioData);
-          isUserSpeakingRef.current = userIsSpeaking;
+      const { token: lkToken } = await languageService.getLiveKitToken(newSessionId);
+      setLiveKitToken(lkToken);
 
-          // Si el usuario está hablando, pausar el audio del bot
-          if (userIsSpeaking && currentAudioSourceRef.current) {
-            try {
-              currentAudioSourceRef.current.stop();
-              currentAudioSourceRef.current = null;
-              isPlayingAudioRef.current = false;
-
-            } catch {
-              // Ignorar errores
-            }
-          }
-
-          // Si el usuario dejó de hablar, reanudar reproducción
-          if (!userIsSpeaking && !isPlayingAudioRef.current && audioQueueRef.current.length > 0) {
-            playNextAudioChunk();
-          }
-
-
-
-          // Enviar audio al Socket.IO
-          sendAudioToSocket(audioData);
-        }
-      };
-
-      // Conectar el flujo de audio
-      source.connect(audioWorkletNode);
-      audioWorkletNode.connect(audioContext.destination);
+      conversationStartTimeRef.current = Date.now();
 
       setFullSubtitles('Hello! 👋');
       setDisplayedSubtitles('');
-      setIsTestMode(true); // Modo test: cuenta hacia atrás
-      setTimeRemaining(240); // Iniciar en 04:00 para modo test
+      setIsTestMode(true);
+      setTimeRemaining(240);
       setIsRecording(true);
-      isRecordingRef.current = true; // Actualizar ref inmediatamente
     } catch (error) {
-      console.error('Error al acceder al micrófono:', error);
-      alert('No se pudo acceder al micrófono. Por favor, verifica los permisos.');
+      console.error('Error starting recording:', error);
+      alert('Could not start placement test. Please try again.');
     }
   };
 
+  // Cleanup Maria
   const handleSkipPlacementTest = () => {
+
     if (isRecording) {
       handleStopRecording();
     }
@@ -1144,7 +554,7 @@ export default function EnglishPractice() {
 
   const handlePracticeTypeSelection = async (type: PracticeType) => {
     setPracticeType(type);
-    
+
     if (type === 'placement') {
       setIsTestMode(true); // Modo test: cuenta hacia atrás
       setTimeRemaining(240); // Iniciar en 04:00 para test
@@ -1175,28 +585,28 @@ export default function EnglishPractice() {
   // Función para encontrar y desplazarse al texto en el transcript
   const scrollToTranscriptText = (searchText: string) => {
     if (!selectedConversationId || !conversationHistory[selectedConversationId]) return;
-    
+
     // Buscar el texto en el historial de conversación
     const history = conversationHistory[selectedConversationId];
-    const matchingEntry = history.find(entry => 
+    const matchingEntry = history.find(entry =>
       entry.role === 'user' && entry.content.toLowerCase().includes(searchText.toLowerCase())
     );
-    
+
     if (matchingEntry) {
       // Cambiar a la vista de conversaciones si no está activa
       if (currentView !== 'conversations') {
         setCurrentView('conversations');
       }
-      
+
       // Usar setTimeout para asegurar que el DOM se actualice antes de hacer scroll
       setTimeout(() => {
         // Buscar el elemento que contiene este texto específico
         const messageElements = document.querySelectorAll('[data-message-content]');
         for (const element of messageElements) {
           if (element.textContent?.toLowerCase().includes(searchText.toLowerCase())) {
-            element.scrollIntoView({ 
-              behavior: 'smooth', 
-              block: 'center' 
+            element.scrollIntoView({
+              behavior: 'smooth',
+              block: 'center'
             });
             // Resaltar temporalmente el elemento
             element.classList.add('bg-yellow-200', 'transition-colors', 'duration-1000');
@@ -1215,7 +625,7 @@ export default function EnglishPractice() {
     // Dividir en palabras para comparar
     const exampleWords = example.split(' ');
     const correctionWords = correction.split(' ');
-    
+
     return (
       <div className="space-y-2">
         <div>
@@ -1338,856 +748,1022 @@ export default function EnglishPractice() {
   const selectedConversation = selectedConversationId ? conversations.find(c => c.id === selectedConversationId) : null;
   const selectedHistory = selectedConversationId ? conversationHistory[selectedConversationId] || [] : [];
 
+
+  const TranscriptHandler = () => {
+    const { transcriptions } = useTranscriptions();
+
+    useEffect(() => {
+      if (transcriptions && transcriptions.length > 0) {
+        const lastTranscription = transcriptions[transcriptions.length - 1];
+        if (lastTranscription.text) {
+          setFullSubtitles(lastTranscription.text);
+          setDisplayedSubtitles(lastTranscription.text);
+        }
+      }
+    }, [transcriptions]);
+
+    return null;
+  };
+
   return (
     <>
-      {/* Vista unificada para Placement Test y Práctica - Pantalla completa */}
       {(showPlacementTest || showPracticeView) && (
         <div className="fixed inset-0 z-50 bg-gradient-to-b from-purple-900 via-purple-950 to-black flex flex-col items-center justify-center">
-          {/* Avatar de Maria con botón CC */}
-          <div className="mb-8 relative inline-block">
-            <div className="w-32 h-32 rounded-full bg-gradient-to-br from-purple-300 to-purple-400 flex items-center justify-center overflow-hidden shadow-lg">
-              <Image
-                src="/images/maria-avatar.png"
-                alt="Maria"
-                width={128}
-                height={128}
-                className="w-full h-full object-cover rounded-full"
-                priority
-              />
-            </div>
-            {/* Icono de Closed Captions - Toggle */}
-            <div className="absolute -top-2 -right-2">
-              <button
-                onClick={() => setShowSubtitles(!showSubtitles)}
-                className={`w-8 h-8 rounded flex items-center justify-center transition-colors ${
-                  showSubtitles 
-                    ? 'bg-blue-600 hover:bg-blue-700' 
-                    : 'bg-gray-700 hover:bg-gray-600'
-                }`}
-                title={showSubtitles ? 'Ocultar subtítulos' : 'Mostrar subtítulos'}
-              >
-                <span className="text-white text-xs font-semibold">CC</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Título */}
-          <div className="text-center mb-6">
-            <h2 className="text-3xl font-semibold text-white mb-2">{getPracticeTitle(practiceType)}</h2>
-            <p className="text-xl text-gray-300">with Maria</p>
-          </div>
-
-          {/* Cronómetro */}
-          <div className="mb-8">
-            <div className="w-32 h-32 rounded-full border-4 border-gray-700 flex items-center justify-center bg-gray-900">
-              <span className="text-4xl font-bold text-white">{formatTime(timeRemaining)}</span>
-            </div>
-          </div>
-
-          {/* Área de Subtítulos con altura fija y scroll */}
-          <div className="w-full max-w-2xl px-4 mb-12">
-            <div className="h-24 overflow-y-auto flex items-center justify-center">
-              {isRecording && showSubtitles && displayedSubtitles ? (
-                <p className="text-center text-white text-lg px-2">
-                  {displayedSubtitles}
-                </p>
-              ) : !isRecording ? (
-                <p className="text-center text-gray-300 px-2">
-                  {getPracticeDescription(practiceType)}
-                </p>
-              ) : null}
-            </div>
-          </div>
-
-          {/* Botones */}
-          <div className="flex gap-4 items-center justify-center">
-            {!isRecording && (
-              <button
-                onClick={showPlacementTest ? handleSkipPlacementTest : handleSkipPractice}
-                className="px-8 py-3 rounded-lg bg-gray-800 hover:bg-gray-700 text-white font-medium transition-colors"
-              >
-                Skip for now
-              </button>
-            )}
-            <button
-              onClick={isRecording ? handleStopRecording : (showPlacementTest ? handleStartRecording : handleStartPractice)}
-              className={`text-white font-medium transition-all flex items-center justify-center ${
-                isRecording
-                  ? 'bg-red-600 hover:bg-red-700 w-16 h-16 rounded-full shadow-lg'
-                  : 'px-8 py-3 rounded-lg bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 gap-2'
-              }`}
+          {liveKitToken ? (
+            <LiveKitRoom
+              token={liveKitToken}
+              serverUrl={process.env.NEXT_PUBLIC_LIVEKIT_URL || 'wss://your-livekit-url'}
+              connect={true}
+              audio={true}
+              video={false}
+              onDisconnected={() => {
+                handleStopRecording();
+              }}
+              style={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}
             >
-              {isRecording ? (
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="white" style={{ transform: 'rotate(135deg)' }}>
-                  <path fill="white" d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/>
-                </svg>
-              ) : (
-                <>
+              <TranscriptHandler />
+              <div className="flex flex-col items-center justify-center w-full max-w-2xl">
+                {/* Avatar de Maria con botón CC */}
+                <div className="mb-8 relative inline-block">
+                  <div className="w-32 h-32 rounded-full bg-gradient-to-br from-purple-300 to-purple-400 flex items-center justify-center overflow-hidden shadow-lg">
+                    <Image
+                      src="/images/maria-avatar.png"
+                      alt="Maria"
+                      width={128}
+                      height={128}
+                      className="w-full h-full object-cover rounded-full"
+                      priority
+                    />
+                  </div>
+                  <div className="absolute -top-2 -right-2">
+                    <button
+                      onClick={() => setShowSubtitles(!showSubtitles)}
+                      className={`w-8 h-8 rounded flex items-center justify-center transition-colors ${showSubtitles ? 'bg-blue-600' : 'bg-gray-700'}`}
+                      title={showSubtitles ? 'Ocultar subtítulos' : 'Mostrar subtítulos'}
+                    >
+                      <span className="text-white text-xs font-semibold">CC</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="text-center mb-6">
+                  <h2 className="text-3xl font-semibold text-white mb-2">{getPracticeTitle(practiceType)}</h2>
+                  <p className="text-xl text-gray-300">with Maria</p>
+                </div>
+
+                <div className="mb-8">
+                  <div className="w-32 h-32 rounded-full border-4 border-gray-700 flex items-center justify-center bg-gray-900">
+                    <span className="text-4xl font-bold text-white">{formatTime(timeRemaining)}</span>
+                  </div>
+                  <div className="mt-4 flex justify-center">
+                    <BarVisualizer />
+                  </div>
+                </div>
+
+                {showSubtitles && (
+                  <div className="w-full px-4 mb-12 h-24 overflow-y-auto">
+                    <p className="text-center text-white text-lg px-2">
+                      {displayedSubtitles || fullSubtitles}
+                    </p>
+                  </div>
+                )}
+
+                <div className="flex gap-4 items-center justify-center">
+                  <button
+                    onClick={handleStopRecording}
+                    className="bg-red-600 hover:bg-red-700 w-16 h-16 rounded-full shadow-lg flex items-center justify-center text-white"
+                  >
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="white" style={{ transform: 'rotate(135deg)' }}>
+                      <path fill="white" d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" />
+                    </svg>
+                  </button>
+                </div>
+
+                <RoomAudioRenderer />
+              </div>
+            </LiveKitRoom>
+          ) : (
+            <div className="flex flex-col items-center justify-center w-full max-w-2xl">
+              <div className="mb-8 relative inline-block">
+                <div className="w-32 h-32 rounded-full bg-gradient-to-br from-purple-300 to-purple-400 flex items-center justify-center overflow-hidden shadow-lg">
+                  <Image
+                    src="/images/maria-avatar.png"
+                    alt="Maria"
+                    width={128}
+                    height={128}
+                    className="w-full h-full object-cover rounded-full"
+                    priority
+                  />
+                </div>
+              </div>
+              <div className="text-center mb-6">
+                <h2 className="text-3xl font-semibold text-white mb-2">{getPracticeTitle(practiceType)}</h2>
+                <p className="text-xl text-gray-300">with Maria</p>
+              </div>
+              <div className="flex gap-4 items-center justify-center">
+                <button
+                  onClick={showPlacementTest ? handleSkipPlacementTest : handleSkipPractice}
+                  className="px-8 py-3 rounded-lg bg-gray-800 hover:bg-gray-700 text-white font-medium transition-colors"
+                >
+                  Skip for now
+                </button>
+                <button
+                  onClick={showPlacementTest ? handleStartRecording : handleStartPractice}
+                  className="px-8 py-3 rounded-lg bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-medium flex items-center gap-2"
+                >
                   <MicrophoneIcon className="w-5 h-5" />
                   Start Call
-                </>
-              )}
-            </button>
-          </div>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       <div className={`flex h-[calc(100vh-4rem)] ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
-      {/* Sidebar */}
-      <div className={`w-64 border-r ${isDarkMode ? 'border-gray-700 bg-gray-900' : 'border-gray-200 bg-white'}`}>
-        <div className="p-4 space-y-2">
-          <button
-            onClick={() => setCurrentView('practice')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-              currentView === 'practice'
-                ? isDarkMode
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-blue-500 text-white'
-                : isDarkMode
-                  ? 'text-gray-300 hover:bg-gray-800'
-                  : 'text-gray-700 hover:bg-gray-100'
-            }`}
-          >
-            <MicrophoneIcon className="w-5 h-5" />
-            <span className="font-medium">Practice</span>
-          </button>
-
-          <button
-            onClick={() => setCurrentView('progress')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-              currentView === 'progress'
-                ? isDarkMode
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-blue-500 text-white'
-                : isDarkMode
-                  ? 'text-gray-300 hover:bg-gray-800'
-                  : 'text-gray-700 hover:bg-gray-100'
-            }`}
-          >
-            <ChartBarIcon className="w-5 h-5" />
-            <span className="font-medium">Progress</span>
-          </button>
-
-          <div className="relative">
+        {/* Sidebar */}
+        <div className={`w-64 border-r ${isDarkMode ? 'border-gray-700 bg-gray-900' : 'border-gray-200 bg-white'}`}>
+          <div className="p-4 space-y-2">
             <button
-              onClick={() => setConversationsOpen(!conversationsOpen)}
-              className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg transition-colors ${
-                currentView === 'conversations'
+              onClick={() => setCurrentView('practice')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${currentView === 'practice'
+                ? isDarkMode
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-blue-500 text-white'
+                : isDarkMode
+                  ? 'text-gray-300 hover:bg-gray-800'
+                  : 'text-gray-700 hover:bg-gray-100'
+                }`}
+            >
+              <MicrophoneIcon className="w-5 h-5" />
+              <span className="font-medium">Practice</span>
+            </button>
+
+            <button
+              onClick={() => setCurrentView('progress')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${currentView === 'progress'
+                ? isDarkMode
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-blue-500 text-white'
+                : isDarkMode
+                  ? 'text-gray-300 hover:bg-gray-800'
+                  : 'text-gray-700 hover:bg-gray-100'
+                }`}
+            >
+              <ChartBarIcon className="w-5 h-5" />
+              <span className="font-medium">Progress</span>
+            </button>
+
+            <div className="relative">
+              <button
+                onClick={() => setConversationsOpen(!conversationsOpen)}
+                className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg transition-colors ${currentView === 'conversations'
                   ? isDarkMode
                     ? 'bg-blue-600 text-white'
                     : 'bg-blue-500 text-white'
                   : isDarkMode
                     ? 'text-gray-300 hover:bg-gray-800'
                     : 'text-gray-700 hover:bg-gray-100'
-              }`}
-            >
-              <div className="flex items-center gap-3">
-                <ClockIcon className="w-5 h-5" />
-                <span className="font-medium">Conversations</span>
-              </div>
-              <ChevronDownIcon
-                className={`w-4 h-4 transition-transform ${conversationsOpen ? 'rotate-180' : ''}`}
-              />
-            </button>
-            {conversationsOpen && (
-              <div className={`mt-2 ml-4 space-y-1 border-l-2 ${isDarkMode ? 'border-gray-700' : 'border-gray-200'} pl-4`}>
-                {conversations.map((conv) => (
-                  <button
-                    key={conv.id}
-                    onClick={() => {
-                      setCurrentView('conversations');
-                      setSelectedConversationId(conv.id);
-                    }}
-                    className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                      selectedConversationId === conv.id
+                  }`}
+              >
+                <div className="flex items-center gap-3">
+                  <ClockIcon className="w-5 h-5" />
+                  <span className="font-medium">Conversations</span>
+                </div>
+                <ChevronDownIcon
+                  className={`w-4 h-4 transition-transform ${conversationsOpen ? 'rotate-180' : ''}`}
+                />
+              </button>
+              {conversationsOpen && (
+                <div className={`mt-2 ml-4 space-y-1 border-l-2 ${isDarkMode ? 'border-gray-700' : 'border-gray-200'} pl-4`}>
+                  {conversations.map((conv) => (
+                    <button
+                      key={conv.id}
+                      onClick={() => {
+                        setCurrentView('conversations');
+                        setSelectedConversationId(conv.id);
+                      }}
+                      className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${selectedConversationId === conv.id
                         ? isDarkMode
                           ? 'bg-blue-600/20 text-blue-300 border border-blue-500'
                           : 'bg-blue-50 text-blue-700 border border-blue-300'
                         : isDarkMode
                           ? 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
                           : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
-                    }`}
-                  >
-                    <div className="font-medium">{conv.title}</div>
-                    <div className="text-xs opacity-70">{conv.date} • {conv.duration}</div>
-                  </button>
-                ))}
-              </div>
-            )}
+                        }`}
+                    >
+                      <div className="font-medium">{conv.title}</div>
+                      <div className="text-xs opacity-70">{conv.date} • {conv.duration}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* Contenido principal */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {currentView === 'practice' && (
-          <>
-            {/* Mensajes */}
-            <div className="flex-1 overflow-y-auto p-4">
-        <div className="max-w-3xl mx-auto">
-          {messages.map((message, index) => (
-            <div
-              key={index}
-              className={`mb-6 ${message.role === 'assistant' ? 'mr-12' : 'ml-12'}`}
-            >
-              <div
-                className={`rounded-lg p-4 ${getMessageColor(message)}`}
-              >
-                <p className="whitespace-pre-wrap">{message.content}</p>
-                {message.feedback?.suggestions && message.feedback.suggestions.length > 0 && (
-                  <div className="mt-2">
-                    {message.feedback?.type === 'perfect' ? (
-                      <div className="flex items-center gap-2 text-sm font-medium">
-                        <svg
-                          className={`w-4 h-5 ${isDarkMode ? 'text-emerald-500' : 'text-emerald-400'}`}
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M5 12l5 5 9-9 M5 19l5 5 9-9"
-                          />
-                        </svg>
-                        <span className={`${isDarkMode ? 'text-emerald-500' : 'text-emerald-400'}`}>
-                          ¡Estupendo!
-                        </span>
-                      </div>
-                    ) : (
-                      <>
-                        <button
-                          onClick={() => toggleSuggestions(index)}
-                          className="flex items-center gap-2 text-sm font-medium hover:opacity-80"
-                        >
-                          <div className={`w-2.5 h-2.5 rounded-full ${message.feedback?.type === 'error'
-                            ? isDarkMode ? 'bg-pink-600' : 'bg-pink-500'
-                            : isDarkMode ? 'bg-yellow-500' : 'bg-yellow-400'
-                            }`} />
-                          <span>Sugerencias</span>
-                          <svg
-                            className={`w-4 h-4 transform transition-transform ${expandedSuggestions[index] ? 'rotate-180' : ''
-                              }`}
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M19 9l-7 7-7-7"
-                            />
-                          </svg>
-                        </button>
-                        {expandedSuggestions[index] && message.feedback?.type && (
-                          <div className={`mt-2 p-3 rounded-lg ${getSuggestionColor(message.feedback.type)}`}>
-                            <ul className="space-y-1">
-                              {message.feedback.suggestions.map((suggestion, idx) => (
-                                <li key={idx} className="text-sm">
-                                  • {suggestion}
-                                </li>
-                              ))}
-                            </ul>
+        {/* Contenido principal */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {currentView === 'practice' && (
+            <>
+              {/* Mensajes */}
+              <div className="flex-1 overflow-y-auto p-4">
+                <div className="max-w-3xl mx-auto">
+                  {messages.map((message, index) => (
+                    <div
+                      key={index}
+                      className={`mb-6 ${message.role === 'assistant' ? 'mr-12' : 'ml-12'}`}
+                    >
+                      <div
+                        className={`rounded-lg p-4 ${getMessageColor(message)}`}
+                      >
+                        <p className="whitespace-pre-wrap">{message.content}</p>
+                        {message.feedback?.suggestions && message.feedback.suggestions.length > 0 && (
+                          <div className="mt-2">
+                            {message.feedback?.type === 'perfect' ? (
+                              <div className="flex items-center gap-2 text-sm font-medium">
+                                <svg
+                                  className={`w-4 h-5 ${isDarkMode ? 'text-emerald-500' : 'text-emerald-400'}`}
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={2}
+                                    d="M5 12l5 5 9-9 M5 19l5 5 9-9"
+                                  />
+                                </svg>
+                                <span className={`${isDarkMode ? 'text-emerald-500' : 'text-emerald-400'}`}>
+                                  ¡Estupendo!
+                                </span>
+                              </div>
+                            ) : (
+                              <>
+                                <button
+                                  onClick={() => toggleSuggestions(index)}
+                                  className="flex items-center gap-2 text-sm font-medium hover:opacity-80"
+                                >
+                                  <div className={`w-2.5 h-2.5 rounded-full ${message.feedback?.type === 'error'
+                                    ? isDarkMode ? 'bg-pink-600' : 'bg-pink-500'
+                                    : isDarkMode ? 'bg-yellow-500' : 'bg-yellow-400'
+                                    }`} />
+                                  <span>Sugerencias</span>
+                                  <svg
+                                    className={`w-4 h-4 transform transition-transform ${expandedSuggestions[index] ? 'rotate-180' : ''
+                                      }`}
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      strokeWidth={2}
+                                      d="M19 9l-7 7-7-7"
+                                    />
+                                  </svg>
+                                </button>
+                                {expandedSuggestions[index] && message.feedback?.type && (
+                                  <div className={`mt-2 p-3 rounded-lg ${getSuggestionColor(message.feedback.type)}`}>
+                                    <ul className="space-y-1">
+                                      {message.feedback.suggestions.map((suggestion, idx) => (
+                                        <li key={idx} className="text-sm">
+                                          • {suggestion}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                              </>
+                            )}
                           </div>
                         )}
-                      </>
-                    )}
-                  </div>
-                )}
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Opciones de práctica si no se ha seleccionado ninguna */}
+                  {!isRecording && messages.length === 1 && (
+                    <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      <button
+                        onClick={() => handlePracticeTypeSelection('interview')}
+                        disabled={loading || !hasEnglishTest}
+                        className={`p-4 rounded-lg text-left transition-all ${isDarkMode
+                          ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                          : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
+                          } ${loading || !hasEnglishTest ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        <h3 className="font-medium mb-1">Software Development Interview</h3>
+                        <p className="text-sm opacity-80">Practice technical development interviews</p>
+                      </button>
+
+                      <button
+                        onClick={() => handlePracticeTypeSelection('grammar')}
+                        disabled={loading || !hasEnglishTest}
+                        className={`p-4 rounded-lg text-left transition-all ${isDarkMode
+                          ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                          : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
+                          } ${loading || !hasEnglishTest ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        <h3 className="font-medium mb-1">Grammar Practice</h3>
+                        <p className="text-sm opacity-80">Focus on grammar rules and structures</p>
+                      </button>
+
+                      <button
+                        onClick={() => handlePracticeTypeSelection('vocabulary')}
+                        disabled={loading || !hasEnglishTest}
+                        className={`p-4 rounded-lg text-left transition-all ${isDarkMode
+                          ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                          : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
+                          } ${loading || !hasEnglishTest ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        <h3 className="font-medium mb-1">Vocabulary Building</h3>
+                        <p className="text-sm opacity-80">Learn new words and expressions</p>
+                      </button>
+
+                      <button
+                        onClick={() => handlePracticeTypeSelection('pronunciation')}
+                        disabled={loading || !hasEnglishTest}
+                        className={`p-4 rounded-lg text-left transition-all ${isDarkMode
+                          ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                          : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
+                          } ${loading || !hasEnglishTest ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        <h3 className="font-medium mb-1">Pronunciation Tips</h3>
+                        <p className="text-sm opacity-80">Improve your pronunciation</p>
+                      </button>
+
+                      <button
+                        onClick={() => handlePracticeTypeSelection('business')}
+                        disabled={loading || !hasEnglishTest}
+                        className={`p-4 rounded-lg text-left transition-all ${isDarkMode
+                          ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                          : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
+                          } ${loading || !hasEnglishTest ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        <h3 className="font-medium mb-1">Business English</h3>
+                        <p className="text-sm opacity-80">Practice professional and business English</p>
+                      </button>
+
+                      <button
+                        onClick={() => handlePracticeTypeSelection('placement')}
+                        disabled={loading || hasEnglishTest}
+                        className={`p-4 rounded-lg text-left transition-all ${isDarkMode
+                          ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                          : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
+                          } ${loading || hasEnglishTest ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        <h3 className="font-medium mb-1">Take the Placement Test</h3>
+                        <p className="text-sm opacity-80">Make a 4 minute call and get your real English level</p>
+                      </button>
+                    </div>
+                  )}
+
+                  <div ref={messagesEndRef} />
+                </div>
               </div>
-            </div>
-          ))}
 
-          {/* Opciones de práctica si no se ha seleccionado ninguna */}
-          {!isRecording && messages.length === 1 && (
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              <button
-                onClick={() => handlePracticeTypeSelection('interview')}
-                disabled={loading || !hasEnglishTest}
-                className={`p-4 rounded-lg text-left transition-all ${isDarkMode
-                  ? 'bg-gray-700 hover:bg-gray-600 text-white'
-                  : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
-                  } ${loading || !hasEnglishTest ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                <h3 className="font-medium mb-1">Software Development Interview</h3>
-                <p className="text-sm opacity-80">Practice technical development interviews</p>
-              </button>
+            </>
+          )}
 
-              <button
-                onClick={() => handlePracticeTypeSelection('grammar')}
-                disabled={loading || !hasEnglishTest}
-                className={`p-4 rounded-lg text-left transition-all ${isDarkMode
-                  ? 'bg-gray-700 hover:bg-gray-600 text-white'
-                  : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
-                  } ${loading || !hasEnglishTest ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                <h3 className="font-medium mb-1">Grammar Practice</h3>
-                <p className="text-sm opacity-80">Focus on grammar rules and structures</p>
-              </button>
-
-              <button
-                onClick={() => handlePracticeTypeSelection('vocabulary')}
-                disabled={loading || !hasEnglishTest}
-                className={`p-4 rounded-lg text-left transition-all ${isDarkMode
-                  ? 'bg-gray-700 hover:bg-gray-600 text-white'
-                  : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
-                  } ${loading || !hasEnglishTest ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                <h3 className="font-medium mb-1">Vocabulary Building</h3>
-                <p className="text-sm opacity-80">Learn new words and expressions</p>
-              </button>
-
-              <button
-                onClick={() => handlePracticeTypeSelection('pronunciation')}
-                disabled={loading || !hasEnglishTest}
-                className={`p-4 rounded-lg text-left transition-all ${isDarkMode
-                  ? 'bg-gray-700 hover:bg-gray-600 text-white'
-                  : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
-                  } ${loading || !hasEnglishTest ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                <h3 className="font-medium mb-1">Pronunciation Tips</h3>
-                <p className="text-sm opacity-80">Improve your pronunciation</p>
-              </button>
-
-              <button
-                onClick={() => handlePracticeTypeSelection('business')}
-                disabled={loading || !hasEnglishTest}
-                className={`p-4 rounded-lg text-left transition-all ${isDarkMode
-                  ? 'bg-gray-700 hover:bg-gray-600 text-white'
-                  : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
-                  } ${loading || !hasEnglishTest ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                <h3 className="font-medium mb-1">Business English</h3>
-                <p className="text-sm opacity-80">Practice professional and business English</p>
-              </button>
-
-              <button
-                onClick={() => handlePracticeTypeSelection('placement')}
-                disabled={loading || hasEnglishTest}
-                className={`p-4 rounded-lg text-left transition-all ${isDarkMode
-                  ? 'bg-gray-700 hover:bg-gray-600 text-white'
-                  : 'bg-white hover:bg-gray-50 text-gray-800 shadow-sm'
-                  } ${loading || hasEnglishTest ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                <h3 className="font-medium mb-1">Take the Placement Test</h3>
-                <p className="text-sm opacity-80">Make a 4 minute call and get your real English level</p>
-              </button>
+          {currentView === 'progress' && (
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="max-w-4xl mx-auto">
+                <EnglishProgressChart
+                  data={progressData}
+                  overallScore={getOverallScore(evaluationData)}
+                  level={evaluationData ? getLevelDescription(evaluationData.level) : "Intermediate"}
+                  levelCode={evaluationData ? evaluationData.level : "B1"}
+                  speakingTime={114}
+                />
+              </div>
             </div>
           )}
 
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
+          {currentView === 'conversations' && (
+            <div className="flex-1 flex overflow-hidden">
+              {/* Área central - Historial de conversación */}
+              <div className="flex-1 overflow-y-auto p-6">
+                {selectedConversation ? (
+                  <div className="max-w-3xl mx-auto">
+                    {/* Header de la conversación */}
+                    <div className="mb-6">
+                      <h2 className={`text-2xl font-bold mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                        {selectedConversation.title}
+                      </h2>
+                      <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                        {selectedConversation.date} • {selectedConversation.duration} • AI Tutor
+                      </p>
+                    </div>
 
-          </>
-        )}
-
-        {currentView === 'progress' && (
-          <div className="flex-1 overflow-y-auto p-6">
-            <div className="max-w-4xl mx-auto">
-              <EnglishProgressChart
-                data={progressData}
-                overallScore={getOverallScore(evaluationData)}
-                level={evaluationData ? getLevelDescription(evaluationData.level) : "Intermediate"}
-                levelCode={evaluationData ? evaluationData.level : "B1"}
-                speakingTime={114}
-              />
-            </div>
-          </div>
-        )}
-
-        {currentView === 'conversations' && (
-          <div className="flex-1 flex overflow-hidden">
-            {/* Área central - Historial de conversación */}
-            <div className="flex-1 overflow-y-auto p-6">
-              {selectedConversation ? (
-                <div className="max-w-3xl mx-auto">
-                  {/* Header de la conversación */}
-                  <div className="mb-6">
-                    <h2 className={`text-2xl font-bold mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                      {selectedConversation.title}
-                    </h2>
-                    <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                      {selectedConversation.date} • {selectedConversation.duration} • AI Tutor
-                    </p>
-                  </div>
-
-                  {/* Historial de mensajes */}
-                  <div className="space-y-4">
-                    {selectedHistory.map((message, index) => (
-                      <div
-                        key={index}
-                        className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                      >
-                        <div className={`max-w-[80%] ${message.role === 'user' ? 'order-2' : 'order-1'}`}>
-                          <div className={`mb-1 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                            {message.role === 'user' ? 'You' : 'AI Tutor'} • {message.timestamp}
-                          </div>
-                          <div
-                            className={`rounded-lg p-4 ${
-                              message.role === 'user'
+                    {/* Historial de mensajes */}
+                    <div className="space-y-4">
+                      {selectedHistory.map((message, index) => (
+                        <div
+                          key={index}
+                          className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                        >
+                          <div className={`max-w-[80%] ${message.role === 'user' ? 'order-2' : 'order-1'}`}>
+                            <div className={`mb-1 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                              {message.role === 'user' ? 'You' : 'AI Tutor'} • {message.timestamp}
+                            </div>
+                            <div
+                              className={`rounded-lg p-4 ${message.role === 'user'
                                 ? isDarkMode
                                   ? 'bg-blue-600 text-white'
                                   : 'bg-blue-500 text-white'
                                 : isDarkMode
                                   ? 'bg-gray-700 text-white'
                                   : 'bg-white text-gray-800 border border-gray-200'
-                            }`}
-                            data-message-content
-                          >
-                            <p className="whitespace-pre-wrap">{message.content}</p>
+                                }`}
+                              data-message-content
+                            >
+                              <p className="whitespace-pre-wrap">{message.content}</p>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <div className="max-w-4xl mx-auto">
-                  <h2 className={`text-2xl font-bold mb-6 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                    Your Conversations
-                  </h2>
-                  <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                    Selecciona una conversación del menú lateral para ver su historial.
-                  </p>
-                </div>
-              )}
-            </div>
+                ) : (
+                  <div className="max-w-4xl mx-auto">
+                    <h2 className={`text-2xl font-bold mb-6 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                      Your Conversations
+                    </h2>
+                    <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                      Selecciona una conversación del menú lateral para ver su historial.
+                    </p>
+                  </div>
+                )}
+              </div>
 
-            {/* Sidebar derecho - Recomendaciones del tutor */}
-            {selectedConversation && (
-              <div className={`w-[500px] border-l ${isDarkMode ? 'border-gray-700 bg-gray-900' : 'border-gray-200 bg-white'} overflow-y-auto`}>
-                <div className="p-6">
-                  <h3 className={`text-lg font-semibold mb-4 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                    Tutor recommendations
-                  </h3>
+              {/* Sidebar derecho - Recomendaciones del tutor */}
+              {selectedConversation && (
+                <div className={`w-[500px] border-l ${isDarkMode ? 'border-gray-700 bg-gray-900' : 'border-gray-200 bg-white'} overflow-y-auto`}>
+                  <div className="p-6">
+                    <h3 className={`text-lg font-semibold mb-4 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                      Tutor recommendations
+                    </h3>
 
-                  {/* Tabs */}
-                  <div className="flex border-b mb-4" style={{ borderColor: isDarkMode ? '#374151' : '#E5E7EB' }}>
-                    {(['pronunciation', 'vocabulary', 'grammar', 'fluency'] as const).map((tab) => (
-                      <button
-                        key={tab}
-                        onClick={() => setActiveRecommendationTab(tab)}
-                        className={`px-3 py-2 text-sm font-medium capitalize transition-colors ${
-                          activeRecommendationTab === tab
+                    {/* Tabs */}
+                    <div className="flex border-b mb-4" style={{ borderColor: isDarkMode ? '#374151' : '#E5E7EB' }}>
+                      {(['pronunciation', 'vocabulary', 'grammar', 'fluency'] as const).map((tab) => (
+                        <button
+                          key={tab}
+                          onClick={() => setActiveRecommendationTab(tab)}
+                          className={`px-3 py-2 text-sm font-medium capitalize transition-colors ${activeRecommendationTab === tab
                             ? isDarkMode
                               ? 'text-blue-400 border-b-2 border-blue-400'
                               : 'text-blue-600 border-b-2 border-blue-600'
                             : isDarkMode
                               ? 'text-gray-400 hover:text-gray-300'
                               : 'text-gray-600 hover:text-gray-900'
-                        }`}
-                      >
-                        {tab}
-                      </button>
-                    ))}
-                  </div>
+                            }`}
+                        >
+                          {tab}
+                        </button>
+                      ))}
+                    </div>
 
-                  {/* Contenido de recomendaciones */}
-                  {activeRecommendationTab === 'vocabulary' && evaluationData?.vocabulary ? (
-                    <div className="space-y-4">
-                      {/* Score del vocabulario */}
-                      <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
-                        <div className="flex items-center justify-between mb-2">
-                          <h4 className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                            Vocabulary
-                          </h4>
-                          <span className={`px-2 py-1 rounded text-sm font-medium ${
-                            evaluationData.vocabulary.score >= 80 
-                              ? 'bg-green-100 text-green-800' 
-                              : evaluationData.vocabulary.score >= 60 
-                                ? 'bg-yellow-100 text-yellow-800' 
+                    {/* Contenido de recomendaciones */}
+                    {activeRecommendationTab === 'pronunciation' && evaluationData?.pronunciation ? (
+                      <div className="space-y-4">
+                        {/* Score de pronunciación */}
+                        <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                          <div className="flex items-center justify-between mb-2">
+                            <h4 className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                              Pronunciation
+                            </h4>
+                            <span className={`px-2 py-1 rounded text-sm font-medium ${evaluationData.pronunciation.score >= 80
+                              ? 'bg-green-100 text-green-800'
+                              : evaluationData.pronunciation.score >= 60
+                                ? 'bg-yellow-100 text-yellow-800'
                                 : 'bg-red-100 text-red-800'
-                          }`}>
-                            {evaluationData.vocabulary.score}%
-                          </span>
+                              }`}>
+                              {evaluationData.pronunciation.score}%
+                            </span>
+                          </div>
+                          <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                            Practice sounds and tricky words to make your speech clearer.
+                          </p>
                         </div>
-                        <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-                          Replace words you used in the call with stronger ones to sound like native.
+
+                        {/* Palabras mal pronunciadas */}
+                        {evaluationData.pronunciation.mispronouncedWords && evaluationData.pronunciation.mispronouncedWords.length > 0 && (
+                          <div className="space-y-3">
+                            <h5 className={`text-sm font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                              Words to Practice
+                            </h5>
+
+                            <div className="space-y-2">
+                              {evaluationData.pronunciation.mispronouncedWords.map((wordData, index) => (
+                                <div key={index} className={`border rounded-lg ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+                                  {/* Palabra clickeable */}
+                                  <button
+                                    onClick={() => {
+                                      setExpandedPronunciationWords(prev => ({
+                                        ...prev,
+                                        [index]: !prev[index]
+                                      }));
+                                      // También desplazarse al transcript
+                                      scrollToTranscriptText(wordData.word);
+                                    }}
+                                    className={`w-full p-4 text-left transition-colors ${isDarkMode
+                                      ? 'hover:bg-gray-800 text-white'
+                                      : 'hover:bg-gray-50 text-gray-900'
+                                      }`}
+                                  >
+                                    <div className="flex items-center justify-between">
+                                      <div className="flex-1">
+                                        <div className="flex items-center gap-3 mb-1">
+                                          <span className="text-lg font-medium">
+                                            {wordData.word}
+                                          </span>
+                                          <span className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                                            /{wordData.ipa}/
+                                          </span>
+                                        </div>
+                                        <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                                          Attempted {wordData.attempts} time{wordData.attempts !== 1 ? 's' : ''}
+                                        </p>
+                                      </div>
+                                      <svg
+                                        className={`w-5 h-5 transition-transform ${expandedPronunciationWords[index] ? 'rotate-180' : ''
+                                          } ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                      >
+                                        <path
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                          strokeWidth={2}
+                                          d="M19 9l-7 7-7-7"
+                                        />
+                                      </svg>
+                                    </div>
+                                  </button>
+
+                                  {/* Contenido expandido */}
+                                  {expandedPronunciationWords[index] && (
+                                    <div className={`border-t p-4 ${isDarkMode ? 'border-gray-700 bg-gray-800/50' : 'border-gray-200 bg-gray-50'}`}>
+                                      {/* Pronunciación IPA */}
+                                      <div className="mb-4">
+                                        <h6 className={`text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                                          Correct Pronunciation
+                                        </h6>
+                                        <div className={`p-3 rounded ${isDarkMode ? 'bg-blue-900/20' : 'bg-blue-50'}`}>
+                                          <span className={`text-lg font-mono ${isDarkMode ? 'text-blue-300' : 'text-blue-700'}`}>
+                                            /{wordData.ipa}/
+                                          </span>
+                                        </div>
+                                      </div>
+
+                                      {/* Notas y consejos */}
+                                      <div className="mb-4">
+                                        <h6 className={`text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                                          Tips
+                                        </h6>
+                                        <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                                          {wordData.notes}
+                                        </p>
+                                      </div>
+
+                                      {/* Última vez escuchada */}
+                                      <div>
+                                        <h6 className={`text-sm font-medium mb-1 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                                          Last heard
+                                        </h6>
+                                        <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                                          {new Date(wordData.lastHeard).toLocaleString()}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Mensaje si no hay palabras mal pronunciadas */}
+                        {(!evaluationData.pronunciation.mispronouncedWords || evaluationData.pronunciation.mispronouncedWords.length === 0) && (
+                          <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-green-900/20' : 'bg-green-50'}`}>
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-2xl">🎉</span>
+                              <h5 className={`font-medium ${isDarkMode ? 'text-green-300' : 'text-green-800'}`}>
+                                Great pronunciation!
+                              </h5>
+                            </div>
+                            <p className={`text-sm ${isDarkMode ? 'text-green-400' : 'text-green-700'}`}>
+                              No mispronounced words detected in this session. Keep up the excellent work!
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    ) : activeRecommendationTab === 'pronunciation' ? (
+                      <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                        <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                          Complete a practice session to see pronunciation recommendations.
                         </p>
                       </div>
-
-                      {/* YOU SAID - Palabras repetidas */}
-                      {evaluationData.vocabulary.repeatedWords && evaluationData.vocabulary.repeatedWords.length > 0 && (
-                        <div>
-                          <div className="flex items-center justify-between mb-3">
-                            <h5 className={`text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-                              LEVEL
-                            </h5>
-                            <h5 className={`text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-                              YOU SAID
-                            </h5>
-                            <h5 className={`text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-                              WE SUGGEST
-                            </h5>
+                    ) : activeRecommendationTab === 'vocabulary' && evaluationData?.vocabulary ? (
+                      <div className="space-y-4">
+                        {/* Score del vocabulario */}
+                        <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                          <div className="flex items-center justify-between mb-2">
+                            <h4 className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                              Vocabulary
+                            </h4>
+                            <span className={`px-2 py-1 rounded text-sm font-medium ${evaluationData.vocabulary.score >= 80
+                              ? 'bg-green-100 text-green-800'
+                              : evaluationData.vocabulary.score >= 60
+                                ? 'bg-yellow-100 text-yellow-800'
+                                : 'bg-red-100 text-red-800'
+                              }`}>
+                              {evaluationData.vocabulary.score}%
+                            </span>
                           </div>
-                          
-                          <div className="space-y-3">
-                            {evaluationData.vocabulary.repeatedWords.map((word, index) => {
-                              // Buscar la sugerencia correspondiente en el array de suggestedWords
-                              // Las sugerencias vienen en formato "collaborate instead of work"
-                              const suggestionText = evaluationData.vocabulary.suggestedWords?.find(suggestion => 
-                                suggestion.toLowerCase().includes(`instead of ${word.toLowerCase()}`)
-                              );
-                              
-                              // Extraer solo la palabra sugerida (antes de "instead of")
-                              const suggestedWord = suggestionText 
-                                ? suggestionText.split(' instead of ')[0].trim()
-                                : 'No suggestion available';
-                              
-                              return (
-                                <div key={index} className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-100'} grid grid-cols-3 gap-4 items-center`}>
-                                  <span className={`px-2 py-1 rounded text-xs font-medium text-center ${isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800'}`}>
-                                    A1
-                                  </span>
-                                  <span className={`text-sm font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                                    {word}
-                                  </span>
-                                  <span className={`text-sm font-medium ${isDarkMode ? 'text-green-400' : 'text-green-600'}`}>
-                                    {suggestedWord}
-                                  </span>
-                                </div>
-                              );
-                            })}
-                          </div>
+                          <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                            Replace words you used in the call with stronger ones to sound like native.
+                          </p>
                         </div>
-                      )}
 
-                      {/* Palabras raras usadas (si las hay) */}
-                      {evaluationData.vocabulary.rareWordsUsed && evaluationData.vocabulary.rareWordsUsed.length > 0 && (
-                        <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-green-900/20' : 'bg-green-50'}`}>
-                          <h5 className={`text-sm font-medium mb-2 ${isDarkMode ? 'text-green-300' : 'text-green-800'}`}>
-                            Advanced words you used:
-                          </h5>
-                          <div className="flex flex-wrap gap-2">
-                            {evaluationData.vocabulary.rareWordsUsed.map((word, index) => (
-                              <span key={index} className={`px-2 py-1 rounded text-xs ${isDarkMode ? 'bg-green-800 text-green-200' : 'bg-green-100 text-green-800'}`}>
-                                {word}
-                              </span>
+                        {/* YOU SAID - Palabras repetidas */}
+                        {evaluationData.vocabulary.repeatedWords && evaluationData.vocabulary.repeatedWords.length > 0 && (
+                          <div>
+                            <div className="flex items-center justify-between mb-3">
+                              <h5 className={`text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                                LEVEL
+                              </h5>
+                              <h5 className={`text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                                YOU SAID
+                              </h5>
+                              <h5 className={`text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                                WE SUGGEST
+                              </h5>
+                            </div>
+
+                            <div className="space-y-3">
+                              {evaluationData.vocabulary.repeatedWords.map((word, index) => {
+                                // Buscar la sugerencia correspondiente en el array de suggestedWords
+                                // Las sugerencias vienen en formato "collaborate instead of work"
+                                const suggestionText = evaluationData.vocabulary.suggestedWords?.find(suggestion =>
+                                  suggestion.toLowerCase().includes(`instead of ${word.toLowerCase()}`)
+                                );
+
+                                // Extraer solo la palabra sugerida (antes de "instead of")
+                                const suggestedWord = suggestionText
+                                  ? suggestionText.split(' instead of ')[0].trim()
+                                  : 'No suggestion available';
+
+                                return (
+                                  <div key={index} className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-100'} grid grid-cols-3 gap-4 items-center`}>
+                                    <span className={`px-2 py-1 rounded text-xs font-medium text-center ${isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800'}`}>
+                                      A1
+                                    </span>
+                                    <span className={`text-sm font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                                      {word}
+                                    </span>
+                                    <span className={`text-sm font-medium ${isDarkMode ? 'text-green-400' : 'text-green-600'}`}>
+                                      {suggestedWord}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Palabras raras usadas (si las hay) */}
+                        {evaluationData.vocabulary.rareWordsUsed && evaluationData.vocabulary.rareWordsUsed.length > 0 && (
+                          <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-green-900/20' : 'bg-green-50'}`}>
+                            <h5 className={`text-sm font-medium mb-2 ${isDarkMode ? 'text-green-300' : 'text-green-800'}`}>
+                              Advanced words you used:
+                            </h5>
+                            <div className="flex flex-wrap gap-2">
+                              {evaluationData.vocabulary.rareWordsUsed.map((word, index) => (
+                                <span key={index} className={`px-2 py-1 rounded text-xs ${isDarkMode ? 'bg-green-800 text-green-200' : 'bg-green-100 text-green-800'}`}>
+                                  {word}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : activeRecommendationTab === 'grammar' && evaluationData?.grammar ? (
+                      <div className="space-y-4">
+                        {/* Score de gramática */}
+                        <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                          <div className="flex items-center justify-between mb-2">
+                            <h4 className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                              Grammar
+                            </h4>
+                            <span className={`px-2 py-1 rounded text-sm font-medium ${evaluationData.grammar.score >= 80
+                              ? 'bg-green-100 text-green-800'
+                              : evaluationData.grammar.score >= 60
+                                ? 'bg-yellow-100 text-yellow-800'
+                                : 'bg-red-100 text-red-800'
+                              }`}>
+                              {evaluationData.grammar.score}%
+                            </span>
+                          </div>
+                          <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                            Review your grammar mistakes.
+                          </p>
+                        </div>
+
+                        {/* Lista de errores de gramática */}
+                        {evaluationData.grammar.errors && evaluationData.grammar.errors.length > 0 && (
+                          <div className="space-y-3">
+                            {/* Agrupar errores por tipo */}
+                            {Object.entries(
+                              evaluationData.grammar.errors.reduce((acc, error, index) => {
+                                const type = error.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                                if (!acc[type]) {
+                                  acc[type] = [];
+                                }
+                                acc[type].push({ ...error, originalIndex: index });
+                                return acc;
+                              }, {} as Record<string, Array<typeof evaluationData.grammar.errors[0] & { originalIndex: number }>>)
+                            ).map(([errorType, errors]) => (
+                              <div key={errorType}>
+                                <h5 className={`text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                                  {errorType}
+                                </h5>
+                                <div className="space-y-2">
+                                  {errors.map((error) => (
+                                    <div key={error.originalIndex} className={`border rounded-lg ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+                                      {/* Error clickeable */}
+                                      <button
+                                        onClick={() => {
+                                          toggleGrammarError(error.originalIndex);
+                                          // También desplazarse al transcript
+                                          scrollToTranscriptText(error.example);
+                                        }}
+                                        className={`w-full p-4 text-left transition-colors ${isDarkMode
+                                          ? 'hover:bg-gray-800 text-white'
+                                          : 'hover:bg-gray-50 text-gray-900'
+                                          }`}
+                                      >
+                                        <div className="flex items-center justify-between">
+                                          <div className="flex-1">
+                                            <p className="text-sm font-medium mb-1">
+                                              {error.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                            </p>
+                                            <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                                              {error.example}
+                                            </p>
+                                          </div>
+                                          <svg
+                                            className={`w-5 h-5 transition-transform ${expandedGrammarErrors[error.originalIndex] ? 'rotate-180' : ''
+                                              } ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}
+                                            fill="none"
+                                            stroke="currentColor"
+                                            viewBox="0 0 24 24"
+                                          >
+                                            <path
+                                              strokeLinecap="round"
+                                              strokeLinejoin="round"
+                                              strokeWidth={2}
+                                              d="M19 9l-7 7-7-7"
+                                            />
+                                          </svg>
+                                        </div>
+                                      </button>
+
+                                      {/* Contenido expandido */}
+                                      {expandedGrammarErrors[error.originalIndex] && (
+                                        <div className={`border-t p-4 ${isDarkMode ? 'border-gray-700 bg-gray-800/50' : 'border-gray-200 bg-gray-50'}`}>
+                                          {/* Comparación example vs correction */}
+                                          {highlightGrammarDifferences(error.example, error.correction)}
+
+                                          {/* Explicación */}
+                                          <div className="mt-4">
+                                            <h6 className={`text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                                              Explanation
+                                            </h6>
+                                            <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                                              {error.notes}
+                                            </p>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
                             ))}
                           </div>
-                        </div>
-                      )}
-                    </div>
-                  ) : activeRecommendationTab === 'grammar' && evaluationData?.grammar ? (
-                    <div className="space-y-4">
-                      {/* Score de gramática */}
+                        )}
+                      </div>
+                    ) : activeRecommendationTab === 'grammar' ? (
                       <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
-                        <div className="flex items-center justify-between mb-2">
-                          <h4 className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                            Grammar
-                          </h4>
-                          <span className={`px-2 py-1 rounded text-sm font-medium ${
-                            evaluationData.grammar.score >= 80 
-                              ? 'bg-green-100 text-green-800' 
-                              : evaluationData.grammar.score >= 60 
-                                ? 'bg-yellow-100 text-yellow-800' 
-                                : 'bg-red-100 text-red-800'
-                          }`}>
-                            {evaluationData.grammar.score}%
-                          </span>
-                        </div>
-                        <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-                          Review your grammar mistakes.
+                        <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                          Complete a practice session to see grammar recommendations.
                         </p>
                       </div>
+                    ) : activeRecommendationTab === 'fluency' && evaluationData?.fluency ? (
+                      <div className="space-y-4">
+                        {/* Score de fluidez */}
+                        <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                          <div className="flex items-center justify-between mb-2">
+                            <h4 className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                              Fluency
+                            </h4>
+                            <span className={`px-2 py-1 rounded text-sm font-medium ${evaluationData.fluency.score >= 80
+                              ? 'bg-green-100 text-green-800'
+                              : evaluationData.fluency.score >= 60
+                                ? 'bg-yellow-100 text-yellow-800'
+                                : 'bg-red-100 text-red-800'
+                              }`}>
+                              {evaluationData.fluency.score}%
+                            </span>
+                          </div>
+                          <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                            Review your speech pace and parasitic words.
+                          </p>
+                        </div>
 
-                      {/* Lista de errores de gramática */}
-                      {evaluationData.grammar.errors && evaluationData.grammar.errors.length > 0 && (
-                        <div className="space-y-3">
-                          {/* Agrupar errores por tipo */}
-                          {Object.entries(
-                            evaluationData.grammar.errors.reduce((acc, error, index) => {
-                              const type = error.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-                              if (!acc[type]) {
-                                acc[type] = [];
-                              }
-                              acc[type].push({ ...error, originalIndex: index });
-                              return acc;
-                            }, {} as Record<string, Array<typeof evaluationData.grammar.errors[0] & { originalIndex: number }>>)
-                          ).map(([errorType, errors]) => (
-                            <div key={errorType}>
-                              <h5 className={`text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                                {errorType}
+                        {/* Parasitic Words */}
+                        {evaluationData.fluency.mostUsedWords && evaluationData.fluency.mostUsedWords.length > 0 && (
+                          <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                            <div className="flex items-center gap-2 mb-3">
+                              <h5 className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                                Parasitic Words
                               </h5>
-                              <div className="space-y-2">
-                                {errors.map((error) => (
-                                  <div key={error.originalIndex} className={`border rounded-lg ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
-                                    {/* Error clickeable */}
-                                    <button
-                                      onClick={() => {
-                                        toggleGrammarError(error.originalIndex);
-                                        // También desplazarse al transcript
-                                        scrollToTranscriptText(error.example);
-                                      }}
-                                      className={`w-full p-4 text-left transition-colors ${
-                                        isDarkMode 
-                                          ? 'hover:bg-gray-800 text-white' 
-                                          : 'hover:bg-gray-50 text-gray-900'
-                                      }`}
-                                    >
-                                      <div className="flex items-center justify-between">
-                                        <div className="flex-1">
-                                          <p className="text-sm font-medium mb-1">
-                                            {error.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                                          </p>
-                                          <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-                                            {error.example}
-                                          </p>
-                                        </div>
-                                        <svg
-                                          className={`w-5 h-5 transition-transform ${
-                                            expandedGrammarErrors[error.originalIndex] ? 'rotate-180' : ''
-                                          } ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}
-                                          fill="none"
-                                          stroke="currentColor"
-                                          viewBox="0 0 24 24"
-                                        >
-                                          <path
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                            strokeWidth={2}
-                                            d="M19 9l-7 7-7-7"
-                                          />
-                                        </svg>
-                                      </div>
-                                    </button>
-
-                                    {/* Contenido expandido */}
-                                    {expandedGrammarErrors[error.originalIndex] && (
-                                      <div className={`border-t p-4 ${isDarkMode ? 'border-gray-700 bg-gray-800/50' : 'border-gray-200 bg-gray-50'}`}>
-                                        {/* Comparación example vs correction */}
-                                        {highlightGrammarDifferences(error.example, error.correction)}
-                                        
-                                        {/* Explicación */}
-                                        <div className="mt-4">
-                                          <h6 className={`text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                                            Explanation
-                                          </h6>
-                                          <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-                                            {error.notes}
-                                          </p>
-                                        </div>
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
                             </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ) : activeRecommendationTab === 'grammar' ? (
-                    <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
-                      <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                        Complete a practice session to see grammar recommendations.
-                      </p>
-                    </div>
-                  ) : activeRecommendationTab === 'fluency' && evaluationData?.fluency ? (
-                    <div className="space-y-4">
-                      {/* Score de fluidez */}
-                      <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
-                        <div className="flex items-center justify-between mb-2">
-                          <h4 className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                            Fluency
-                          </h4>
-                          <span className={`px-2 py-1 rounded text-sm font-medium ${
-                            evaluationData.fluency.score >= 80 
-                              ? 'bg-green-100 text-green-800' 
-                              : evaluationData.fluency.score >= 60 
-                                ? 'bg-yellow-100 text-yellow-800' 
-                                : 'bg-red-100 text-red-800'
-                          }`}>
-                            {evaluationData.fluency.score}%
-                          </span>
-                        </div>
-                        <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-                          Review your speech pace and parasitic words.
-                        </p>
-                      </div>
 
-                      {/* Parasitic Words */}
-                      {evaluationData.fluency.mostUsedWords && evaluationData.fluency.mostUsedWords.length > 0 && (
+                            <div className="flex items-center gap-2 mb-3">
+                              <span className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                                {evaluationData.fluency.fillerWordsRatio ? Math.round(evaluationData.fluency.fillerWordsRatio * 100) : 0}%
+                              </span>
+                              <span className="text-2xl">👍</span>
+                            </div>
+
+                            <p className={`text-sm mb-3 ${(evaluationData.fluency.fillerWordsRatio || 0) < 0.1
+                              ? isDarkMode ? 'text-green-400' : 'text-green-600'
+                              : isDarkMode ? 'text-yellow-400' : 'text-yellow-600'
+                              }`}>
+                              <span className="font-medium">
+                                {(evaluationData.fluency.fillerWordsRatio || 0) < 0.1 ? 'Great results!' : 'Good progress!'}
+                              </span>
+                              {' '}Your filler words usage is {(evaluationData.fluency.fillerWordsRatio || 0) < 0.1 ? 'low' : 'moderate'}.
+                            </p>
+
+                            <p className={`text-sm mb-3 ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                              Your most frequently used words are:
+                            </p>
+
+                            <div className="flex flex-wrap gap-3">
+                              {evaluationData.fluency.mostUsedWords.map((wordData, index) => (
+                                <div key={index} className="flex items-center gap-2">
+                                  <span className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                                    {wordData.word}
+                                  </span>
+                                  <span className={`px-2 py-1 rounded text-sm ${isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'}`}>
+                                    {wordData.count}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Words per Minute */}
                         <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
                           <div className="flex items-center gap-2 mb-3">
                             <h5 className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                              Parasitic Words
+                              Words per Minute
                             </h5>
                           </div>
-                          
+
                           <div className="flex items-center gap-2 mb-3">
                             <span className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                              {evaluationData.fluency.fillerWordsRatio ? Math.round(evaluationData.fluency.fillerWordsRatio * 100) : 0}%
+                              {Math.round(evaluationData.fluency.wordsPerMinute || 0)} words
                             </span>
-                            <span className="text-2xl">👍</span>
+                            <span className="text-2xl">🤖</span>
                           </div>
 
-                          <p className={`text-sm mb-3 ${
-                            (evaluationData.fluency.fillerWordsRatio || 0) < 0.1 
-                              ? isDarkMode ? 'text-green-400' : 'text-green-600'
-                              : isDarkMode ? 'text-yellow-400' : 'text-yellow-600'
-                          }`}>
-                            <span className="font-medium">
-                              {(evaluationData.fluency.fillerWordsRatio || 0) < 0.1 ? 'Great results!' : 'Good progress!'} 
-                            </span>
-                            {' '}Your filler words usage is {(evaluationData.fluency.fillerWordsRatio || 0) < 0.1 ? 'low' : 'moderate'}.
-                          </p>
-
-                          <p className={`text-sm mb-3 ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-                            Your most frequently used words are:
-                          </p>
-
-                          <div className="flex flex-wrap gap-3">
-                            {evaluationData.fluency.mostUsedWords.map((wordData, index) => (
-                              <div key={index} className="flex items-center gap-2">
-                                <span className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                                  {wordData.word}
-                                </span>
-                                <span className={`px-2 py-1 rounded text-sm ${isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'}`}>
-                                  {wordData.count}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Words per Minute */}
-                      <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
-                        <div className="flex items-center gap-2 mb-3">
-                          <h5 className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                            Words per Minute
-                          </h5>
-                        </div>
-
-                        <div className="flex items-center gap-2 mb-3">
-                          <span className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                            {Math.round(evaluationData.fluency.wordsPerMinute || 0)} words
-                          </span>
-                          <span className="text-2xl">🤖</span>
-                        </div>
-
-                        {evaluationData.fluency.nativeRange && (
-                          <>
-                            <p className={`text-sm mb-3 ${
-                              (evaluationData.fluency.wordsPerMinute || 0) >= evaluationData.fluency.nativeRange.min &&
-                              (evaluationData.fluency.wordsPerMinute || 0) <= evaluationData.fluency.nativeRange.max
+                          {evaluationData.fluency.nativeRange && (
+                            <>
+                              <p className={`text-sm mb-3 ${(evaluationData.fluency.wordsPerMinute || 0) >= evaluationData.fluency.nativeRange.min &&
+                                (evaluationData.fluency.wordsPerMinute || 0) <= evaluationData.fluency.nativeRange.max
                                 ? isDarkMode ? 'text-green-400' : 'text-green-600'
                                 : (evaluationData.fluency.wordsPerMinute || 0) < evaluationData.fluency.nativeRange.min
                                   ? isDarkMode ? 'text-yellow-400' : 'text-yellow-600'
                                   : isDarkMode ? 'text-blue-400' : 'text-blue-600'
-                            }`}>
-                              <span className="font-medium">
-                                {(evaluationData.fluency.wordsPerMinute || 0) >= evaluationData.fluency.nativeRange.min &&
-                                 (evaluationData.fluency.wordsPerMinute || 0) <= evaluationData.fluency.nativeRange.max
-                                  ? 'Perfect pace!'
-                                  : (evaluationData.fluency.wordsPerMinute || 0) < evaluationData.fluency.nativeRange.min
-                                    ? 'Speed up'
-                                    : 'Slow down'
+                                }`}>
+                                <span className="font-medium">
+                                  {(evaluationData.fluency.wordsPerMinute || 0) >= evaluationData.fluency.nativeRange.min &&
+                                    (evaluationData.fluency.wordsPerMinute || 0) <= evaluationData.fluency.nativeRange.max
+                                    ? 'Perfect pace!'
+                                    : (evaluationData.fluency.wordsPerMinute || 0) < evaluationData.fluency.nativeRange.min
+                                      ? 'Speed up'
+                                      : 'Slow down'
+                                  }
+                                </span>
+                                {' '}
+                                {(evaluationData.fluency.wordsPerMinute || 0) < evaluationData.fluency.nativeRange.min
+                                  ? 'a bit and add confidence to make your speech more engaging.'
+                                  : (evaluationData.fluency.wordsPerMinute || 0) > evaluationData.fluency.nativeRange.max
+                                    ? 'a bit to make your speech clearer and easier to follow.'
+                                    : 'Your speaking speed is in the native range.'
                                 }
-                              </span>
-                              {' '}
-                              {(evaluationData.fluency.wordsPerMinute || 0) < evaluationData.fluency.nativeRange.min
-                                ? 'a bit and add confidence to make your speech more engaging.'
-                                : (evaluationData.fluency.wordsPerMinute || 0) > evaluationData.fluency.nativeRange.max
-                                  ? 'a bit to make your speech clearer and easier to follow.'
-                                  : 'Your speaking speed is in the native range.'
-                              }
-                            </p>
+                              </p>
 
-                            <div className="mb-2">
-                              <span className={`text-sm font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                                You
-                              </span>
-                            </div>
+                              <div className="mb-2">
+                                <span className={`text-sm font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                                  You
+                                </span>
+                              </div>
 
-                            {/* Barra de progreso */}
-                            <div className="relative">
-                              <div className={`h-2 rounded-full ${isDarkMode ? 'bg-gray-700' : 'bg-gray-200'}`}>
-                                {/* Rango nativo (verde) */}
-                                <div 
-                                  className="absolute h-2 bg-green-500 rounded-full"
-                                  style={{
-                                    left: `${(evaluationData.fluency.nativeRange.min / 200) * 100}%`,
-                                    width: `${((evaluationData.fluency.nativeRange.max - evaluationData.fluency.nativeRange.min) / 200) * 100}%`
-                                  }}
-                                />
-                                {/* Posición del usuario */}
-                                <div 
-                                  className="absolute w-4 h-4 bg-white border-2 border-orange-500 rounded-full -top-1"
-                                  style={{
-                                    left: `${Math.min(Math.max((evaluationData.fluency.wordsPerMinute || 0) / 200 * 100, 0), 100)}%`,
-                                    transform: 'translateX(-50%)'
-                                  }}
-                                />
+                              {/* Barra de progreso */}
+                              <div className="relative">
+                                <div className={`h-2 rounded-full ${isDarkMode ? 'bg-gray-700' : 'bg-gray-200'}`}>
+                                  {/* Rango nativo (verde) */}
+                                  <div
+                                    className="absolute h-2 bg-green-500 rounded-full"
+                                    style={{
+                                      left: `${(evaluationData.fluency.nativeRange.min / 200) * 100}%`,
+                                      width: `${((evaluationData.fluency.nativeRange.max - evaluationData.fluency.nativeRange.min) / 200) * 100}%`
+                                    }}
+                                  />
+                                  {/* Posición del usuario */}
+                                  <div
+                                    className="absolute w-4 h-4 bg-white border-2 border-orange-500 rounded-full -top-1"
+                                    style={{
+                                      left: `${Math.min(Math.max((evaluationData.fluency.wordsPerMinute || 0) / 200 * 100, 0), 100)}%`,
+                                      transform: 'translateX(-50%)'
+                                    }}
+                                  />
+                                </div>
+
+                                {/* Labels */}
+                                <div className="flex justify-between mt-2 text-xs">
+                                  <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>slow</span>
+                                  <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>{evaluationData.fluency.nativeRange.min}</span>
+                                  <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>just right</span>
+                                  <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>{evaluationData.fluency.nativeRange.max}</span>
+                                  <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>fast</span>
+                                </div>
                               </div>
-                              
-                              {/* Labels */}
-                              <div className="flex justify-between mt-2 text-xs">
-                                <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>slow</span>
-                                <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>{evaluationData.fluency.nativeRange.min}</span>
-                                <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>just right</span>
-                                <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>{evaluationData.fluency.nativeRange.max}</span>
-                                <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>fast</span>
-                              </div>
-                            </div>
-                          </>
-                        )}
+                            </>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ) : activeRecommendationTab === 'fluency' ? (
-                    <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
-                      <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                        Complete a practice session to see fluency recommendations.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
-                      <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                        {tutorRecommendations[activeRecommendationTab]}
-                      </p>
-                    </div>
-                  )}
+                    ) : activeRecommendationTab === 'fluency' ? (
+                      <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                        <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                          Complete a practice session to see fluency recommendations.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                        <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                          {tutorRecommendations[activeRecommendationTab]}
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      <Modal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        title="Límite de Uso Alcanzado"
-      >
-        <div className="space-y-4">
-          <p className="text-gray-700">{modalMessage}</p>
-          <p className="text-gray-700">Actualiza tu plan y sigue disfrutando de todos los beneficios</p>
-          <Link
-            href="/plans"
-            className={`inline-flex items-center px-4 py-2 rounded-lg text-white font-medium transition-colors ${isDarkMode ? 'bg-blue-600 hover:bg-blue-700' : 'bg-blue-500 hover:bg-blue-600'
-              }`}
-          >
-            Actualizar ahora
-            <svg
-              className="ml-2 w-5 h-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M13 7l5 5m0 0l-5 5m5-5H6"
-              />
-            </svg>
-          </Link>
+              )}
+            </div>
+          )}
         </div>
-      </Modal>
+
+        <Modal
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          title="Límite de Uso Alcanzado"
+        >
+          <div className="space-y-4">
+            <p className="text-gray-700">{modalMessage}</p>
+            <p className="text-gray-700">Actualiza tu plan y sigue disfrutando de todos los beneficios</p>
+            <Link
+              href="/plans"
+              className={`inline-flex items-center px-4 py-2 rounded-lg text-white font-medium transition-colors ${isDarkMode ? 'bg-blue-600 hover:bg-blue-700' : 'bg-blue-500 hover:bg-blue-600'
+                }`}
+            >
+              Actualizar ahora
+              <svg
+                className="ml-2 w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M13 7l5 5m0 0l-5 5m5-5H6"
+                />
+              </svg>
+            </Link>
+          </div>
+        </Modal>
       </div>
     </>
   );
