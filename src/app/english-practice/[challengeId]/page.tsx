@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, type Dispatch, type SetStateAction } from 'react';
 import { useTheme } from '@/context/ThemeContext';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
@@ -13,16 +13,22 @@ import { ChevronDownIcon } from '@heroicons/react/24/solid';
 import { languageService, SessionCompletionResponse } from '@/services/languageService';
 import {
   LiveKitRoom,
-  VoiceAssistantControlBar,
-  DisconnectButton,
-  useVoiceAssistant,
   BarVisualizer,
   RoomAudioRenderer,
+  useDataChannel,
+  useLocalParticipant,
+  useConnectionState,
+  useIsSpeaking,
   useTranscriptions,
+  useRemoteParticipants,
+  useParticipantTracks,
+  useTrackTranscription,
 } from '@livekit/components-react';
 import { Track } from 'livekit-client';
 import '@livekit/components-styles';
 
+const MARIA_PARTICIPANT_IDENTITY = 'maria-agent';
+const MARIA_AUDIO_TRACK_NAME = 'maria-voice';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -44,15 +50,198 @@ interface AudioUrlEntry {
   url: string;
 }
 
+interface ConversationHistoryEntry {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+
+interface BackendTranscriptEntry {
+  role: 'user' | 'assistant';
+  text: string;
+  timestamp: number;
+}
+
+interface MariaSubtitleMessage {
+  type: 'maria_subtitle';
+  participantIdentity: string;
+  trackSid: string;
+  segmentId: string;
+  text: string;
+  final: boolean;
+  startTimeMs: number;
+  endTimeMs: number;
+  language: string;
+}
+
+interface MariaSubtitleSegment extends MariaSubtitleMessage {
+  updatedAt: number;
+}
+
 type PracticeType = 'interview' | 'grammar' | 'vocabulary' | 'pronunciation' | 'business' | 'placement';
 
 type ViewType = 'practice' | 'progress' | 'conversations';
+
+interface TranscriptHandlerProps {
+  setFullSubtitles: Dispatch<SetStateAction<string>>;
+}
+
+function LocalAudioDiagnostics() {
+  const connectionState = useConnectionState();
+  const { localParticipant, microphoneTrack } = useLocalParticipant();
+  const isSpeaking = useIsSpeaking(localParticipant);
+
+  useEffect(() => {
+    console.log('[LK] local participant status', {
+      connectionState,
+      participantIdentity: localParticipant.identity,
+      participantSid: localParticipant.sid,
+      microphoneTrackSid: microphoneTrack?.trackSid || '',
+      microphoneTrackName: microphoneTrack?.trackName || '',
+      microphoneSource: microphoneTrack?.source || '',
+      microphoneIsMuted: microphoneTrack?.isMuted,
+      microphoneIsEnabled: microphoneTrack?.isEnabled,
+      microphoneIsSubscribed: microphoneTrack?.isSubscribed,
+      microphoneHasTrack: Boolean(microphoneTrack?.track),
+      canPublish: localParticipant.permissions?.canPublish,
+      isSpeaking,
+    });
+  }, [connectionState, isSpeaking, localParticipant, microphoneTrack]);
+
+  useEffect(() => {
+    if (connectionState !== 'connected') {
+      return;
+    }
+
+    console.log('[LK] user speaking state', {
+      participantIdentity: localParticipant.identity,
+      isSpeaking,
+      microphoneTrackSid: microphoneTrack?.trackSid || '',
+      microphoneIsMuted: microphoneTrack?.isMuted,
+      microphoneHasTrack: Boolean(microphoneTrack?.track),
+    });
+  }, [connectionState, isSpeaking, localParticipant.identity, microphoneTrack]);
+
+  return null;
+}
+
+function TranscriptHandler({ setFullSubtitles }: TranscriptHandlerProps) {
+  const remoteParticipants = useRemoteParticipants();
+  const mariaParticipant = remoteParticipants.find(
+    (participant) =>
+      participant.identity === MARIA_PARTICIPANT_IDENTITY
+      || participant.identity.includes(MARIA_PARTICIPANT_IDENTITY)
+  ) || remoteParticipants.find((participant) =>
+    Array.from(participant.trackPublications.values()).some(
+      (publication) => publication.trackName === MARIA_AUDIO_TRACK_NAME
+    )
+  );
+
+  const mariaPublication = mariaParticipant
+    ? Array.from(mariaParticipant.trackPublications.values()).find(
+      (publication) => publication.trackName === MARIA_AUDIO_TRACK_NAME
+    )
+    : undefined;
+
+  const mariaTrackSid = mariaPublication?.trackSid;
+
+  const mariaAudioTracks = useParticipantTracks([Track.Source.Microphone], {
+    participantIdentity: mariaParticipant?.identity,
+  });
+
+  const mariaAudioTrack = mariaAudioTracks.find(
+    (track) => track.publication?.trackSid === mariaTrackSid
+  ) || mariaAudioTracks.find(
+    (track) => track.publication?.trackName === MARIA_AUDIO_TRACK_NAME
+  ) || mariaAudioTracks[0];
+
+  const { segments: remoteTrackTranscriptions } = useTrackTranscription(mariaAudioTrack);
+  const fallbackTranscriptions = useTranscriptions({
+    participantIdentities: mariaParticipant ? [mariaParticipant.identity] : undefined,
+    trackSids: mariaTrackSid ? [mariaTrackSid] : undefined,
+  });
+  const subtitleSegmentsRef = useRef<Map<string, MariaSubtitleSegment>>(new Map());
+  const [accumulatedDataSubtitle, setAccumulatedDataSubtitle] = useState('');
+
+  useDataChannel('maria_subtitles', (message) => {
+    try {
+      const parsed = JSON.parse(new TextDecoder().decode(message.payload)) as Partial<MariaSubtitleMessage>;
+
+      if (parsed.type !== 'maria_subtitle') {
+        return;
+      }
+
+      if (parsed.participantIdentity !== MARIA_PARTICIPANT_IDENTITY) {
+        return;
+      }
+
+      if (!parsed.segmentId || !parsed.text) {
+        return;
+      }
+
+      if (mariaTrackSid && parsed.trackSid && parsed.trackSid !== mariaTrackSid) {
+        return;
+      }
+
+      const nextSegment: MariaSubtitleSegment = {
+        type: 'maria_subtitle',
+        participantIdentity: parsed.participantIdentity,
+        trackSid: parsed.trackSid || mariaTrackSid || '',
+        segmentId: parsed.segmentId,
+        text: parsed.text,
+        final: Boolean(parsed.final),
+        startTimeMs: parsed.startTimeMs || 0,
+        endTimeMs: parsed.endTimeMs || 0,
+        language: parsed.language || '',
+        updatedAt: Date.now(),
+      };
+
+      subtitleSegmentsRef.current.set(nextSegment.segmentId, nextSegment);
+
+      const orderedSegments = [...subtitleSegmentsRef.current.values()]
+        .sort((a, b) => {
+          const aTime = Math.max(a.endTimeMs || 0, a.startTimeMs || 0, a.updatedAt);
+          const bTime = Math.max(b.endTimeMs || 0, b.startTimeMs || 0, b.updatedAt);
+          return aTime - bTime;
+        });
+
+      const nextAccumulatedSubtitle = orderedSegments
+        .map((segment) => segment.text.trim())
+        .filter(Boolean)
+        .join(' ');
+
+      setAccumulatedDataSubtitle(nextAccumulatedSubtitle);
+    } catch (error) {
+      console.error('[LK] Failed to parse maria_subtitles payload', error);
+    }
+  });
+
+  useEffect(() => {
+    const latestRemoteTrackSegment = [...remoteTrackTranscriptions]
+      .reverse()
+      .find((segment) => segment.text?.trim());
+    const latestFallback = [...fallbackTranscriptions]
+      .reverse()
+      .find((transcription) => transcription.text?.trim());
+
+    const nextSubtitle =
+      accumulatedDataSubtitle.trim()
+      || latestRemoteTrackSegment?.text?.trim()
+      || latestFallback?.text?.trim()
+      || '';
+
+    setFullSubtitles(nextSubtitle);
+  }, [accumulatedDataSubtitle, fallbackTranscriptions, remoteTrackTranscriptions, setFullSubtitles]);
+
+  return null;
+}
 
 export default function EnglishPractice() {
   const { isDarkMode } = useTheme();
   const { data: session, status } = useSession();
   const router = useRouter();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const subtitlesContainerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -131,6 +320,32 @@ export default function EnglishPractice() {
   const conversationStartTimeRef = useRef<number>(0);
   const transcriptRef = useRef<TranscriptEntry[]>([]);
   const audioUrlsRef = useRef<AudioUrlEntry[]>([]);
+  const [conversations, setConversations] = useState([
+    { id: 1, title: 'Software Development Interview', date: '2024-01-15', duration: '15 min' },
+    { id: 2, title: 'Grammar Practice', date: '2024-01-14', duration: '10 min' },
+    { id: 3, title: 'Vocabulary Building', date: '2024-01-13', duration: '12 min' },
+  ]);
+  const [conversationHistory, setConversationHistory] = useState<Record<number, ConversationHistoryEntry[]>>({
+    1: [
+      { role: 'assistant', content: "Hello! I'm your English practice assistant. Let's start with a software development interview. Can you tell me about your experience with version control systems?", timestamp: '00:01' },
+      { role: 'user', content: "I have experience with Git. I use it daily for my projects.", timestamp: '00:17' },
+      { role: 'assistant', content: "Great! Can you explain the difference between Git merge and Git rebase?", timestamp: '00:35' },
+      { role: 'user', content: "Merge combines branches and creates a merge commit, while rebase rewrites history.", timestamp: '00:52' },
+      { role: 'assistant', content: "Excellent explanation! Let's move on to another topic. How do you handle code reviews in your team?", timestamp: '01:10' },
+    ],
+    2: [
+      { role: 'assistant', content: "Welcome to Grammar Practice! Let's work on verb tenses. Can you complete this sentence: 'By next year, I _____ (work) here for five years.'", timestamp: '00:01' },
+      { role: 'user', content: "I will have worked here for five years.", timestamp: '00:20' },
+      { role: 'assistant', content: "Perfect! You used the future perfect tense correctly. Let's try another one.", timestamp: '00:38' },
+      { role: 'user', content: "I'm ready.", timestamp: '00:45' },
+    ],
+    3: [
+      { role: 'assistant', content: "Let's build your vocabulary! Today we'll focus on technical terms. Can you explain what 'refactoring' means?", timestamp: '00:01' },
+      { role: 'user', content: "Refactoring is improving code without changing its functionality.", timestamp: '00:18' },
+      { role: 'assistant', content: "Excellent! That's a precise definition. Now, can you tell me what 'technical debt' means?", timestamp: '00:35' },
+      { role: 'user', content: "Technical debt is when you take shortcuts that need to be fixed later.", timestamp: '00:52' },
+    ],
+  });
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -147,6 +362,17 @@ export default function EnglishPractice() {
     scrollToBottom();
   }, [messages]);
 
+  useEffect(() => {
+    if (!showSubtitles) {
+      return;
+    }
+
+    subtitlesContainerRef.current?.scrollTo({
+      top: subtitlesContainerRef.current.scrollHeight,
+      behavior: 'smooth',
+    });
+  }, [displayedSubtitles, fullSubtitles, showSubtitles]);
+
   // Sincronizar sessionId con el ref (por si se actualiza directamente el estado)
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -160,6 +386,11 @@ export default function EnglishPractice() {
   // Efecto para mostrar subtítulos gradualmente
   useEffect(() => {
     if (!showSubtitles || !isRecording) {
+      setDisplayedSubtitles('');
+      return;
+    }
+
+    if (!fullSubtitles.trim()) {
       setDisplayedSubtitles('');
       return;
     }
@@ -306,7 +537,7 @@ export default function EnglishPractice() {
         };
 
         // Convertir transcript del backend al formato del frontend
-        const formattedTranscript = result.conversationLog.transcript.map((entry: any) => ({
+        const formattedTranscript = result.conversationLog.transcript.map((entry: BackendTranscriptEntry) => ({
           role: entry.role,
           content: entry.text, // Cambiar 'text' a 'content'
           timestamp: formatTimestamp(entry.timestamp)
@@ -423,9 +654,12 @@ export default function EnglishPractice() {
         language: 'english',
         mode: 'practice',
         context: context
-      }) as any;
+      });
 
       const newSessionId = response.sessionId || response._id;
+      if (!newSessionId) {
+        throw new Error('Session ID not returned by backend.');
+      }
       setSessionId(newSessionId);
 
       const { token: lkToken } = await languageService.getLiveKitToken(newSessionId);
@@ -433,7 +667,7 @@ export default function EnglishPractice() {
 
       conversationStartTimeRef.current = Date.now();
 
-      setFullSubtitles('Hi! 👋 I\'m Maria. Let\'s practice together!');
+      setFullSubtitles('');
       setDisplayedSubtitles('');
       setIsTestMode(false);
       setTimeRemaining(0);
@@ -455,9 +689,12 @@ export default function EnglishPractice() {
       const response = await languageService.startSession(userId, {
         language: 'english',
         mode: 'test'
-      }) as any;
+      });
 
       const newSessionId = response.sessionId || response._id;
+      if (!newSessionId) {
+        throw new Error('Session ID not returned by backend.');
+      }
       setSessionId(newSessionId);
 
       const { token: lkToken } = await languageService.getLiveKitToken(newSessionId);
@@ -465,7 +702,7 @@ export default function EnglishPractice() {
 
       conversationStartTimeRef.current = Date.now();
 
-      setFullSubtitles('Hello! 👋');
+      setFullSubtitles('');
       setDisplayedSubtitles('');
       setIsTestMode(true);
       setTimeRemaining(240);
@@ -708,35 +945,6 @@ export default function EnglishPractice() {
     { skill: 'Fluency', score: 0 },
   ];
 
-  // Estados para conversaciones
-  const [conversations, setConversations] = useState([
-    { id: 1, title: 'Software Development Interview', date: '2024-01-15', duration: '15 min' },
-    { id: 2, title: 'Grammar Practice', date: '2024-01-14', duration: '10 min' },
-    { id: 3, title: 'Vocabulary Building', date: '2024-01-13', duration: '12 min' },
-  ]);
-
-  const [conversationHistory, setConversationHistory] = useState<{ [key: number]: Array<{ role: 'user' | 'assistant'; content: string; timestamp: string }> }>({
-    1: [
-      { role: 'assistant', content: "Hello! I'm your English practice assistant. Let's start with a software development interview. Can you tell me about your experience with version control systems?", timestamp: '00:01' },
-      { role: 'user', content: "I have experience with Git. I use it daily for my projects.", timestamp: '00:17' },
-      { role: 'assistant', content: "Great! Can you explain the difference between Git merge and Git rebase?", timestamp: '00:35' },
-      { role: 'user', content: "Merge combines branches and creates a merge commit, while rebase rewrites history.", timestamp: '00:52' },
-      { role: 'assistant', content: "Excellent explanation! Let's move on to another topic. How do you handle code reviews in your team?", timestamp: '01:10' },
-    ],
-    2: [
-      { role: 'assistant', content: "Welcome to Grammar Practice! Let's work on verb tenses. Can you complete this sentence: 'By next year, I _____ (work) here for five years.'", timestamp: '00:01' },
-      { role: 'user', content: "I will have worked here for five years.", timestamp: '00:20' },
-      { role: 'assistant', content: "Perfect! You used the future perfect tense correctly. Let's try another one.", timestamp: '00:38' },
-      { role: 'user', content: "I'm ready.", timestamp: '00:45' },
-    ],
-    3: [
-      { role: 'assistant', content: "Let's build your vocabulary! Today we'll focus on technical terms. Can you explain what 'refactoring' means?", timestamp: '00:01' },
-      { role: 'user', content: "Refactoring is improving code without changing its functionality.", timestamp: '00:18' },
-      { role: 'assistant', content: "Excellent! That's a precise definition. Now, can you tell me what 'technical debt' means?", timestamp: '00:35' },
-      { role: 'user', content: "Technical debt is when you take shortcuts that need to be fixed later.", timestamp: '00:52' },
-    ],
-  });
-
   // Recomendaciones mock del tutor
   const tutorRecommendations = {
     pronunciation: "Practice sounds /d/ and /tf/. Focus on tricky words like 'changer' to make your speech clearer.",
@@ -747,24 +955,6 @@ export default function EnglishPractice() {
 
   const selectedConversation = selectedConversationId ? conversations.find(c => c.id === selectedConversationId) : null;
   const selectedHistory = selectedConversationId ? conversationHistory[selectedConversationId] || [] : [];
-
-
-  const TranscriptHandler = () => {
-    const { transcriptions } = useTranscriptions();
-
-    useEffect(() => {
-      if (transcriptions && transcriptions.length > 0) {
-        const lastTranscription = transcriptions[transcriptions.length - 1];
-        if (lastTranscription.text) {
-          setFullSubtitles(lastTranscription.text);
-          setDisplayedSubtitles(lastTranscription.text);
-        }
-      }
-    }, [transcriptions]);
-
-    return null;
-  };
-
   return (
     <>
       {(showPlacementTest || showPracticeView) && (
@@ -774,14 +964,29 @@ export default function EnglishPractice() {
               token={liveKitToken}
               serverUrl={process.env.NEXT_PUBLIC_LIVEKIT_URL || 'wss://your-livekit-url'}
               connect={true}
-              audio={true}
+              audio={{
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+              }}
               video={false}
-              onDisconnected={() => {
+              onConnected={() => {
+                console.log('[EnglishPractice] LiveKit connected');
+              }}
+              onError={(error) => {
+                console.error('[EnglishPractice] LiveKit error', error);
+              }}
+              onMediaDeviceFailure={(failure, kind) => {
+                console.error('[EnglishPractice] Media device failure', { failure, kind });
+              }}
+              onDisconnected={(reason) => {
+                console.warn('[EnglishPractice] LiveKit disconnected', { reason });
                 handleStopRecording();
               }}
               style={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}
             >
-              <TranscriptHandler />
+              <LocalAudioDiagnostics />
+              <TranscriptHandler setFullSubtitles={setFullSubtitles} />
               <div className="flex flex-col items-center justify-center w-full max-w-2xl">
                 {/* Avatar de Maria con botón CC */}
                 <div className="mb-8 relative inline-block">
@@ -811,7 +1016,7 @@ export default function EnglishPractice() {
                   <p className="text-xl text-gray-300">with Maria</p>
                 </div>
 
-                <div className="mb-8">
+                <div className="mb-8 flex flex-col items-center justify-center">
                   <div className="w-32 h-32 rounded-full border-4 border-gray-700 flex items-center justify-center bg-gray-900">
                     <span className="text-4xl font-bold text-white">{formatTime(timeRemaining)}</span>
                   </div>
@@ -821,10 +1026,13 @@ export default function EnglishPractice() {
                 </div>
 
                 {showSubtitles && (
-                  <div className="w-full px-4 mb-12 h-24 overflow-y-auto">
-                    <p className="text-center text-white text-lg px-2">
-                      {displayedSubtitles || fullSubtitles}
-                    </p>
+                  <div className="w-full max-w-xl px-4 mb-12 min-h-24 flex items-center justify-center">
+                    <div
+                      ref={subtitlesContainerRef}
+                      className="w-full max-h-40 overflow-y-auto rounded-xl bg-black/35 px-4 py-3 text-center text-white text-lg leading-relaxed shadow-md"
+                    >
+                      {displayedSubtitles || fullSubtitles || 'Waiting for Maria subtitles...'}
+                    </div>
                   </div>
                 )}
 
