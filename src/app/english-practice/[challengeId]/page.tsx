@@ -448,7 +448,7 @@ export default function EnglishPractice() {
   }, []);
 
   // Función para enviar la conversación completa al backend
-  const sendConversationToBackend = useCallback(async () => {
+  const sendConversationToBackend = useCallback(async (): Promise<number | null> => {
     const currentSessionId = sessionIdRef.current;
     const userId = session?.user?.id;
 
@@ -470,6 +470,7 @@ export default function EnglishPractice() {
 
     try {
       const result: SessionCompletionResponse = await languageService.completeSession(userId, currentSessionId, payload);
+      let latestConversationId: number | null = null;
 
       console.log('========== RESPUESTA DEL BACKEND ==========');
       console.log('Response:', JSON.stringify(result, null, 2));
@@ -550,6 +551,7 @@ export default function EnglishPractice() {
           date: new Date().toISOString().split('T')[0], // Formato YYYY-MM-DD
           duration: `${Math.floor(durationSeconds / 60)} min`
         };
+        latestConversationId = newConversationId;
 
         // Actualizar la lista de conversaciones
         setConversations(prev => [newConversation, ...prev]);
@@ -566,12 +568,14 @@ export default function EnglishPractice() {
           transcriptLength: formattedTranscript.length
         });
       }
+      return latestConversationId;
     } catch (error) {
       console.error('========== ERROR AL ENVIAR CONVERSACIÓN ==========');
       console.error(error);
+      return null;
     }
 
-  }, [session]);
+  }, [conversations, practiceType, session]);
 
   const handleStopRecording = useCallback(async () => {
     setIsRecording(false);
@@ -583,13 +587,17 @@ export default function EnglishPractice() {
     setShowSubtitles(true);
     setLiveKitToken(null);
 
-    await sendConversationToBackend();
+    const latestConversationId = await sendConversationToBackend();
     updateSessionId(null);
 
     setShowPlacementTest(false);
     setShowPracticeView(false);
     setPracticeType(null);
-    setCurrentView('practice');
+    setConversationsOpen(true);
+    setCurrentView('conversations');
+    if (latestConversationId !== null) {
+      setSelectedConversationId(latestConversationId);
+    }
   }, [updateSessionId, sendConversationToBackend]);
 
   // Manejar el cronómetro
