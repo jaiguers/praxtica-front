@@ -16,6 +16,11 @@ export interface MispronouncedWord {
   notes: string;
 }
 
+export interface ConversationAudioUrlEntry {
+  role: 'user' | 'assistant';
+  url: string;
+}
+
 export interface SessionCompletionResponse {
   success: boolean;
   sessionId: string;
@@ -61,7 +66,7 @@ export interface SessionCompletionResponse {
       text: string;
       timestamp: number;
     }>;
-    audioUrls: Array<any>;
+    audioUrls: ConversationAudioUrlEntry[];
   };
   [key: string]: unknown;
 }

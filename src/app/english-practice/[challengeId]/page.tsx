@@ -39,17 +39,6 @@ interface Message {
   };
 }
 
-interface TranscriptEntry {
-  role: 'user' | 'assistant';
-  text: string;
-  timestamp: number;
-}
-
-interface AudioUrlEntry {
-  role: 'user' | 'assistant';
-  url: string;
-}
-
 interface ConversationHistoryEntry {
   role: 'user' | 'assistant';
   content: string;
@@ -318,8 +307,6 @@ export default function EnglishPractice() {
   const [liveKitToken, setLiveKitToken] = useState<string | null>(null);
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const conversationStartTimeRef = useRef<number>(0);
-  const transcriptRef = useRef<TranscriptEntry[]>([]);
-  const audioUrlsRef = useRef<AudioUrlEntry[]>([]);
   const [conversations, setConversations] = useState([
     { id: 1, title: 'Software Development Interview', date: '2024-01-15', duration: '15 min' },
     { id: 2, title: 'Grammar Practice', date: '2024-01-14', duration: '10 min' },
@@ -454,7 +441,7 @@ export default function EnglishPractice() {
 
     if (!currentSessionId || !userId) {
       console.warn('No se puede enviar conversación: falta sessionId o userId');
-      return;
+      return null;
     }
 
     const endTime = Date.now();
@@ -762,24 +749,6 @@ export default function EnglishPractice() {
   };
 
   // Función para obtener la descripción según el tipo de práctica
-  const getPracticeDescription = (type: PracticeType | null): string => {
-    switch (type) {
-      case 'interview':
-        return 'Practice technical development interviews with AI tutor Maria.';
-      case 'grammar':
-        return 'Focus on grammar rules and structures with personalized feedback.';
-      case 'vocabulary':
-        return 'Learn new words and expressions to expand your vocabulary.';
-      case 'pronunciation':
-        return 'Improve your pronunciation with real-time feedback and tips.';
-      case 'business':
-        return 'Practice professional and business English for workplace communication.';
-      case 'placement':
-        return '4 minutes call with AI tutor to assess your English and identify key growth areas.';
-      default:
-        return 'Practice your English with AI tutor Maria.';
-    }
-  };
 
   if (status === 'loading') {
     return (
@@ -867,10 +836,6 @@ export default function EnglishPractice() {
 
   // Función para resaltar diferencias entre example y correction
   const highlightGrammarDifferences = (example: string, correction: string) => {
-    // Dividir en palabras para comparar
-    const exampleWords = example.split(' ');
-    const correctionWords = correction.split(' ');
-
     return (
       <div className="space-y-2">
         <div>

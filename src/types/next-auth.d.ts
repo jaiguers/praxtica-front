@@ -10,6 +10,7 @@ declare module 'next-auth' {
       image?: string | null;
       token: string;
       ranking: number;
+      isDemo?: boolean;
       languageTests?: {
         english?: unknown;
         [key: string]: unknown;
@@ -24,6 +25,7 @@ declare module 'next-auth' {
     image?: string | null;
     token?: string;
     ranking?: number;
+    isDemo?: boolean;
     languageTests?: {
       english?: unknown;
       [key: string]: unknown;
@@ -37,6 +39,7 @@ declare module 'next-auth/jwt' {
     id?: string;
     token?: string;
     ranking?: number;
+    isDemo?: boolean;
     languageTests?: {
       english?: unknown;
       [key: string]: unknown;

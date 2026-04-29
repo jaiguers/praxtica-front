@@ -30,7 +30,7 @@ export default function Home() {
     }, 3000); // Change word every 3 seconds
 
     return () => clearInterval(interval);
-  }, []);
+  }, [words.length]);
 
   const handleSignIn = async (provider: 'github' | 'google') => {
     setIsLoading(true);
@@ -217,7 +217,7 @@ export default function Home() {
                 isDarkMode ? 'bg-gray-900 text-green-400' : 'bg-gray-900 text-green-400'
               }`}>
                 <div className="mb-2">
-                  <span className="text-gray-500">// Tu AI coworker sugiere:</span>
+                  <span className="text-gray-500">{'// Tu AI coworker sugiere:'}</span>
                 </div>
                 <div className="mb-2">
                   <span className="text-blue-400">function</span>{' '}
@@ -227,7 +227,7 @@ export default function Home() {
                   <span className="text-white">) {'{'}</span>
                 </div>
                 <div className="ml-4 mb-2">
-                  <span className="text-gray-500">// Implementa aquí...</span>
+                  <span className="text-gray-500">{'// Implementa aquí...'}</span>
                 </div>
                 <div>
                   <span className="text-white">{'}'}</span>
@@ -632,7 +632,7 @@ export default function Home() {
               </div>
               
               <p className={`text-sm mb-6 italic ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                "En 3 meses pasé de no poder mantener una conversación a hacer entrevistas en inglés con confianza. La AI se siente como un amigo paciente."
+                &quot;En 3 meses pasé de no poder mantener una conversación a hacer entrevistas en inglés con confianza. La AI se siente como un amigo paciente.&quot;
               </p>
               
               <div className="flex items-center gap-3">
@@ -662,7 +662,7 @@ export default function Home() {
               </div>
               
               <p className={`text-sm mb-6 italic ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                "Los desafíos de código son increíbles. No son ejercicios aburridos, son proyectos reales. El feedback del AI coworker es mejor que muchos code reviews que he recibido."
+                &quot;Los desafíos de código son increíbles. No son ejercicios aburridos, son proyectos reales. El feedback del AI coworker es mejor que muchos code reviews que he recibido.&quot;
               </p>
               
               <div className="flex items-center gap-3">
@@ -692,7 +692,7 @@ export default function Home() {
               </div>
               
               <p className={`text-sm mb-6 italic ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                "Uso Praxtica para mejorar mi español técnico y aprender Python al mismo tiempo. Es la combinación perfecta para mi carrera."
+                &quot;Uso Praxtica para mejorar mi español técnico y aprender Python al mismo tiempo. Es la combinación perfecta para mi carrera.&quot;
               </p>
               
               <div className="flex items-center gap-3">
@@ -722,7 +722,7 @@ export default function Home() {
               </div>
               
               <p className={`text-sm mb-6 italic ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                "Llevo 6 meses usando Praxtica para coding challenges. Mi velocidad resolviendo problemas ha mejorado muchísimo y ahora entiendo mejor los patrones de diseño."
+                &quot;Llevo 6 meses usando Praxtica para coding challenges. Mi velocidad resolviendo problemas ha mejorado muchísimo y ahora entiendo mejor los patrones de diseño.&quot;
               </p>
               
               <div className="flex items-center gap-3">
@@ -752,7 +752,7 @@ export default function Home() {
               </div>
               
               <p className={`text-sm mb-6 italic ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                "Recomiendo Praxtica a todos mis estudiantes. La práctica conversacional ilimitada complementa perfectamente las clases tradicionales."
+                &quot;Recomiendo Praxtica a todos mis estudiantes. La práctica conversacional ilimitada complementa perfectamente las clases tradicionales.&quot;
               </p>
               
               <div className="flex items-center gap-3">
@@ -782,7 +782,7 @@ export default function Home() {
               </div>
               
               <p className={`text-sm mb-6 italic ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                "La función de AI coworker es genial. Es como hacer pair programming 24/7. Me ha ayudado a aprender React y TypeScript de forma práctica."
+                &quot;La función de AI coworker es genial. Es como hacer pair programming 24/7. Me ha ayudado a aprender React y TypeScript de forma práctica.&quot;
               </p>
               
               <div className="flex items-center gap-3">
